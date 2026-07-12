@@ -5,31 +5,41 @@ optionally pushes) changes on a debounce — gitwatch's behaviour, made permanen
 No Dock icon; a small CLI drives it. Standalone: native FSEvents + `git`, no
 `gitwatch`/`fswatch` dependency.
 
-> Status: local dev / self-demo. Packaging for external install (Homebrew) is
-> deliberately parked. See `DESIGN.md` for rationale and decisions.
+> Status: local dev / self-demo, with a working local install. Homebrew-cask
+> packaging is parked. See `DESIGN.md` for rationale and decisions.
 
 ## Requirements
 - macOS 13+ (Ventura), Apple Silicon or Intel
 - The Xcode **command-line tools** for `swiftc` (`xcode-select --install`) — you
   never open Xcode.app itself.
 
-## Dev loop
+## Build / run — three tiers
 ```sh
-make run     # build build/gitwatchd.app and (re)launch it — this is the loop
-make stop    # kill the running instance
-make clean   # remove build artifacts
-make reset   # stop + wipe any stale installed copy / CLI link / login item
+# Tier 1 — dev loop (runs from build/, never touches /Applications or login items)
+make run       # build build/gitwatchd.app and (re)launch it
+make stop      # kill the running instance
+make clean     # remove build artifacts
+
+# Tier 2 — local install (no sudo)
+make install   # → /Applications (or ~/Applications) + CLI on PATH, launches it
+make uninstall # remove app, CLI link, login item, and first-run state
+
+# Tier 3 — distribution (needs a paid Apple Developer account)
+make sign-release DEV_ID="Developer ID Application: NAME (TEAMID)"
+make notarize     NOTARY_PROFILE=<notarytool keychain profile>
 ```
 Edit a file under `Sources/`, run `make run`, and the freshly built app relaunches.
 There's no `.xcodeproj`: `make` compiles `Sources/*.swift` with `swiftc` and
 hand-assembles the `.app` bundle (`Resources/Info.plist` sets `LSUIElement` so it's
-menu-bar-only).
+menu-bar-only). For a from-scratch build: `make clean && make run`.
 
-Nothing is installed to `/Applications` and no PATH symlink is created — you always
-run the bundle in `build/`, so a change to a menu item is one `make run` away and
-never masked by an old install. `make reset` exists to clear state from earlier
-experiments if you ever need a clean slate. For a from-scratch build:
-`make clean && make run`.
+**Dev vs install:** `make run` deliberately runs from `build/` and never registers a
+login item, so menu-item changes are one `make run` away and never masked by a stale
+install. `make install` is the real thing: it copies to `/Applications`, and on the
+**first launch of an installed copy** the daemon registers itself for launch-at-login
+(always-on is the point). That's one-time, gated by a sentinel in
+`~/Library/Application Support/gitwatchd/`, so if you later turn it off it stays off.
+`make uninstall` clears that sentinel too, so you can cleanly re-test onboarding.
 
 ## Manually testing it
 ```sh
@@ -38,7 +48,7 @@ BIN=build/gitwatchd.app/Contents/MacOS/gitwatchd
 # 1. watch a repo (gitwatch-compatible flags; see below)
 $BIN /path/to/a/git/repo          # or: $BIN -s 5 -r origin -b main /path/...
 # 2. edit a file in that repo, wait ~2s, and it auto-commits
-# 3. click the menu-bar icon: repos, per-repo Sync Now / Pause / Copy Path / Finder
+# 3. click the menu-bar icon: repos, per-repo Pause / Copy Path / Open in Finder
 $BIN ls                           # list watched repos + status
 $BIN rm <name|path>               # stop watching
 ```

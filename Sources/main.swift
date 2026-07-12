@@ -27,6 +27,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let envError = GitRuntime.resolved.error {
             NSLog("gitwatchd: shell environment capture FAILED: %@", envError)
         }
+        if let msg = LaunchAtLogin.enableOnFirstInstalledRunIfNeeded() {
+            NSLog("gitwatchd: first run — %@", msg)
+        }
         reload()
 
         // Live-reload when the config file (or CLI) changes it.
@@ -108,7 +111,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let sub = NSMenu()
         add(sub, summarize(w.path), enabled: false)   // head-truncated so rows stay narrow
         sub.addItem(.separator())
-        addAction(sub, "Sync Now", #selector(syncNow(_:)), repo: w)
         addAction(sub, w.paused ? "Resume Watching" : "Pause Watching", #selector(togglePause(_:)), repo: w)
         sub.addItem(.separator())
         addAction(sub, "Copy Path", #selector(copyRepoPath(_:)), repo: w)   // one-click copy
@@ -118,7 +120,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: Actions
 
-    @objc private func syncNow(_ s: NSMenuItem) { (s.representedObject as? RepoWatcher)?.flushNow() }
     @objc private func togglePause(_ s: NSMenuItem) {
         guard let w = s.representedObject as? RepoWatcher else { return }
         w.paused.toggle(); rebuildMenu()
