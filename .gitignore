@@ -1,0 +1,5 @@
+# Build artifacts (hand-assembled .app bundle + compiled binary)
+build/
+
+# macOS
+.DS_Store

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>gitwatchd</string>
+	<key>CFBundleDisplayName</key>
+	<string>gitwatchd</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.gitwatchd.app</string>
+	<key>CFBundleExecutable</key>
+	<string>gitwatchd</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>13.0</string>
+	<!-- LSUIElement = menu-bar-only agent app: no Dock icon, no menu bar app name. -->
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<!-- Shown in the one-time macOS permission prompt when a watched repo lives
+	     in a TCC-protected folder. Makes the prompt self-explanatory. -->
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>gitwatchd watches Git repositories in your Documents folder and auto-commits changes.</string>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>gitwatchd watches Git repositories on your Desktop and auto-commits changes.</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>gitwatchd watches Git repositories in your Downloads folder and auto-commits changes.</string>
+</dict>
+</plist>
