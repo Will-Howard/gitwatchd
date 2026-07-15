@@ -83,11 +83,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             for w in watchers {
                 let branch = Git.currentBranch(w.path)
                 let pending = Git.pendingCount(w.path)
-                let state = w.paused ? "⏸ paused"
-                    : pending > 0 ? "✎ \(pending) pending"
-                    : "✓ \(lastActivity[w.path] ?? "idle")"
-                let row = NSMenuItem(title: "\(w.spec.name)  —  \(branch) · \(state)",
-                                    action: nil, keyEquivalent: "")
+                // "name · branch", with a status tail only when there's something to say.
+                var title = "\(w.spec.name) · \(branch)"
+                if w.paused { title += " · ⏸ paused" }
+                else if pending > 0 { title += " · ✎ \(pending) pending" }
+                let row = NSMenuItem(title: title, action: nil, keyEquivalent: "")
                 row.submenu = repoSubmenu(for: w)
                 menu.addItem(row)
                 add(menu, "     \(Git.lastCommitSummary(w.path))", enabled: false)
@@ -95,14 +95,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         menu.addItem(.separator())
-        add(menu, "Open Config File", action: #selector(openConfig), key: "o")
-        add(menu, "Copy Config Path", action: #selector(copyConfigPath), key: "c")
+        add(menu, "Open Config File", action: #selector(openConfig))
+        add(menu, "Copy Config Path", action: #selector(copyConfigPath))
         menu.addItem(.separator())
-        let login = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
+        // A checkmark via .state forces AppKit to reserve a left gutter column for the
+        // whole menu; show the enabled state in the title instead so rows stay flush-left.
+        let login = NSMenuItem(title: LaunchAtLogin.isEnabled ? "Launch at Login  ✓" : "Launch at Login",
+                               action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
         login.target = self
-        login.state = LaunchAtLogin.isEnabled ? .on : .off
         menu.addItem(login)
-        add(menu, "Quit gitwatchd", action: #selector(quit), key: "q")
+        add(menu, "Quit gitwatchd", action: #selector(quit))
 
         statusItem.menu = menu
     }
