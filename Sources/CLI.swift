@@ -248,7 +248,7 @@ enum CLI {
         gitwatchd - watch git repos and auto-commit changes, from the menu bar
 
         USAGE
-          gitwatchd [flags] <path>     watch a repo (same flags as gitwatch)
+          gitwatchd [flags] <path>     watch a repo
           gitwatchd <command> [args]
 
         EXAMPLES
@@ -270,7 +270,7 @@ enum CLI {
                                 editor (the one `git commit` uses)
           help                  show this help
 
-        FLAGS (gitwatch-compatible, for add)
+        FLAGS (for add)
           -s <secs>     Wait <secs> after the last change before committing, so a
                         batch of writes lands as one commit. Default: 2.
           -r <remote>   Push to <remote> after every commit. Default: no push.
@@ -284,8 +284,6 @@ enum CLI {
           -x <pattern>  Exclude files matching this glob. Repeatable.
           -M            Skip committing while the repo has a merge in progress.
           -g <path>     Location of the .git directory, if elsewhere (--git-dir).
-
-        GITWATCHD EXTRAS
           --paused      Keep the repo in the config but don't watch it.
                         The menu's Pause Watching toggles this.
 
