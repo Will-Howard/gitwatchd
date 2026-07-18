@@ -52,7 +52,10 @@ final class TestRepo {
     func git(_ args: String...) -> String { Git.run(Array(args), in: path).out }
 
     func write(_ file: String, _ contents: String) {
-        try! contents.write(toFile: path + "/" + file, atomically: true, encoding: .utf8)
+        let full = path + "/" + file
+        try? FileManager.default.createDirectory(
+            atPath: (full as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        try! contents.write(toFile: full, atomically: true, encoding: .utf8)
     }
 
     var commitCount: Int { Int(git("rev-list", "--count", "HEAD")) ?? 0 }

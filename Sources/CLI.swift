@@ -35,8 +35,8 @@ enum CLI {
         guard FileManager.default.fileExists(atPath: spec.path) else {
             warn("path does not exist: \(spec.path)"); return 1
         }
-        guard Git.isRepo(spec.path, gitDir: spec.gitDir) else {
-            warn("not a git repo: \(spec.path)\n  run: git init \(spec.path)"); return 1
+        guard Git.isRepo(spec.workDir, gitDir: spec.gitDir) else {
+            warn("not inside a git repo: \(spec.path)\n  run: git init \(spec.workDir)"); return 1
         }
 
         // Persist exactly what the user typed (gitwatch-style line).
@@ -56,8 +56,8 @@ enum CLI {
         let (specs, errors) = Config.load()
         if specs.isEmpty && errors.isEmpty { print("No repos watched."); return 0 }
         for s in specs {
-            let branch = Git.currentBranch(s.path, gitDir: s.gitDir)
-            let pending = Git.pendingCount(s.path, gitDir: s.gitDir)
+            let branch = Git.currentBranch(s.workDir, gitDir: s.gitDir)
+            let pending = Git.pendingCount(s.workDir, gitDir: s.gitDir)
             let state = StatusFormat.cliState(paused: s.paused, pending: pending)
             let dest = s.remote.map { " → \($0)/\(s.branch ?? branch)" } ?? ""
             print("  \(state.padding(toLength: 14, withPad: " ", startingAt: 0)) \(s.name)  (\(s.path))  \(branch)\(dest)")

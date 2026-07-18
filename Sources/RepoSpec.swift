@@ -24,6 +24,18 @@ struct RepoSpec {
 
     var name: String { (path as NSString).lastPathComponent }
 
+    var isFileTarget: Bool {
+        var isDir: ObjCBool = false
+        FileManager.default.fileExists(atPath: path, isDirectory: &isDir)
+        return !isDir.boolValue
+    }
+
+    /// Where git commands run: the target itself, or its parent for a file
+    /// target (upstream's TARGETDIR).
+    var workDir: String {
+        isFileTarget ? (path as NSString).deletingLastPathComponent : path
+    }
+
     func excludes(_ fullPath: String) -> Bool {
         guard let exclude, let regex = try? NSRegularExpression(pattern: exclude) else {
             return false

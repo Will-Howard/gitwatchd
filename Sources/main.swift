@@ -104,8 +104,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             add(menu, "Watching \(watchers.count) repo\(watchers.count == 1 ? "" : "s")", enabled: false)
             menu.addItem(.separator())
             for w in watchers {
-                let branch = Git.currentBranch(w.path, gitDir: w.spec.gitDir)
-                let pending = Git.pendingCount(w.path, gitDir: w.spec.gitDir)
+                let branch = Git.currentBranch(w.spec.workDir, gitDir: w.spec.gitDir)
+                let pending = Git.pendingCount(w.spec.workDir, gitDir: w.spec.gitDir)
                 // "name · branch", with at most one status tail; error detail
                 // stays out of the main menu and lives in the submenu.
                 let title = StatusFormat.rowTitle(
@@ -114,7 +114,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let row = NSMenuItem(title: title, action: nil, keyEquivalent: "")
                 row.submenu = repoSubmenu(for: w)
                 menu.addItem(row)
-                add(menu, "     \(Git.lastCommitSummary(w.path, gitDir: w.spec.gitDir))", enabled: false)
+                add(menu, "     \(Git.lastCommitSummary(w.spec.workDir, gitDir: w.spec.gitDir))", enabled: false)
             }
             for e in configErrors {
                 let row = NSMenuItem(title: StatusFormat.configErrorRow(label: e.label, reason: e.reason),

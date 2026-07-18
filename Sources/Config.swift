@@ -69,7 +69,7 @@ enum Config {
             let reason: String
             if !FileManager.default.fileExists(atPath: spec.path) {
                 reason = "repo not found"
-            } else if !Git.isRepo(spec.path, gitDir: spec.gitDir) {
+            } else if !Git.isRepo(spec.workDir, gitDir: spec.gitDir) {
                 reason = "not a git repo"
             } else {
                 return true

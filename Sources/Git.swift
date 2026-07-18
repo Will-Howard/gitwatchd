@@ -102,15 +102,26 @@ enum Git {
     /// and push (-r/-b). One gitwatch cycle.
     @discardableResult
     static func autoCommit(_ spec: RepoSpec) -> CommitOutcome {
-        let dir = spec.path
+        let dir = spec.workDir
         if spec.noMergeCommit && hasMergeInProgress(dir, gitDir: spec.gitDir) { return .skippedMerge }
         guard pendingCount(dir, gitDir: spec.gitDir) > 0 else { return .clean }
 
-        run(["add", "-A"], in: dir, gitDir: spec.gitDir)
+        // Upstream's GIT_ADD_ARGS: "--all ." scoped to the target directory,
+        // or just the file for a file target.
+        let addTarget = spec.isFileTarget ? spec.path : "."
+        run(["add", "--all", addTarget], in: dir, gitDir: spec.gitDir)
         let msg = spec.message.replacingOccurrences(
             of: "%d", with: RepoSpecParser.formattedDate(spec.dateFormat))
         let commit = run(["commit", "-m", msg], in: dir, gitDir: spec.gitDir)
-        guard commit.code == 0 else { return .commitFailed(detail: errorSummary(commit.out)) }
+        guard commit.code == 0 else {
+            // Repo-wide changes outside the watched subtree stage nothing.
+            if commit.out.contains("nothing to commit")
+                || commit.out.contains("nothing added to commit")
+                || commit.out.contains("no changes added to commit") {
+                return .clean
+            }
+            return .commitFailed(detail: errorSummary(commit.out))
+        }
         guard spec.remote != nil else { return .committed }
         return push(spec)
     }
@@ -127,7 +138,7 @@ enum Git {
     @discardableResult
     static func push(_ spec: RepoSpec) -> CommitOutcome {
         guard let remote = spec.remote else { return .committed }
-        let dir = spec.path
+        let dir = spec.workDir
         var pullFailure: String? = nil
         if spec.rebase {
             let pull = run(["pull", "--rebase", remote], in: dir, gitDir: spec.gitDir)
@@ -150,7 +161,7 @@ enum Git {
     /// `<branch>` from a detached HEAD. Internal so tests can pin the forms.
     static func pushArgs(remote: String, spec: RepoSpec) -> [String] {
         guard let branch = spec.branch else { return ["push", remote] }
-        let head = run(["symbolic-ref", "HEAD"], in: spec.path, gitDir: spec.gitDir)
+        let head = run(["symbolic-ref", "HEAD"], in: spec.workDir, gitDir: spec.gitDir)
         guard head.code == 0 else { return ["push", remote, branch] }
         let current = head.out.replacingOccurrences(of: "refs/heads/", with: "")
         return ["push", remote, "\(current):\(branch)"]

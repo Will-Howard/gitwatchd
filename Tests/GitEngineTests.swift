@@ -196,6 +196,47 @@ struct MergeGuard {
     }
 }
 
+@Suite("Subdirectory and file targets, as upstream handles them")
+struct Targets {
+
+    @Test("watching a subdirectory commits only changes under it")
+    func subdirectoryTarget() {
+        let repo = TestRepo()
+        repo.write("sub/inner.txt", "v1\n")
+        Git.autoCommit(repo.spec())
+        repo.write("sub/inner.txt", "v2\n")
+        repo.write("outer.txt", "left alone\n")
+        let spec = RepoSpecParser.parse([repo.path + "/sub"]).spec!
+        #expect(Git.autoCommit(spec) == .committed)
+        #expect(Git.pendingCount(repo.path) == 1, "outer.txt stays uncommitted")
+        #expect(repo.git("show", "--name-only", "--pretty=") == "sub/inner.txt")
+    }
+
+    @Test("a file target commits only that file")
+    func fileTarget() {
+        let repo = TestRepo()
+        repo.write("a.txt", "v1\n")
+        Git.autoCommit(repo.spec())
+        repo.write("a.txt", "v2\n")
+        repo.write("b.txt", "left alone\n")
+        let spec = RepoSpecParser.parse([repo.path + "/a.txt"]).spec!
+        #expect(Git.autoCommit(spec) == .committed)
+        #expect(Git.pendingCount(repo.path) == 1, "b.txt stays uncommitted")
+        #expect(repo.git("show", "--name-only", "--pretty=") == "a.txt")
+    }
+
+    @Test("changes only outside the watched subtree report clean, not a failure")
+    func outsideChangesOnly() {
+        let repo = TestRepo()
+        repo.write("sub/inner.txt", "v1\n")
+        Git.autoCommit(repo.spec())
+        repo.write("outer.txt", "elsewhere\n")
+        let before = repo.commitCount
+        #expect(Git.autoCommit(RepoSpecParser.parse([repo.path + "/sub"]).spec!) == .clean)
+        #expect(repo.commitCount == before)
+    }
+}
+
 @Suite("Detached git dir (-g), as the help promises")
 struct DetachedGitDir {
 

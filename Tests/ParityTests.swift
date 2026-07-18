@@ -82,18 +82,21 @@ enum GitwatchReference {
 
 /// Build two identical worlds, run the model on one and our engine on the
 /// other with the same flags, and return both fingerprints.
-private func twins(flags: [String], remote: Bool,
+private func twins(flags: [String], remote: Bool, targetSuffix: String? = nil,
                    setup: (TestRepo, BareRemote?) -> Void) -> (model: RepoState, ours: RepoState) {
+    func target(_ repo: TestRepo) -> String {
+        targetSuffix.map { repo.path + "/" + $0 } ?? repo.path
+    }
     let a = TestRepo()
     let ra = remote ? a.addOrigin() : nil
     setup(a, ra)
-    GitwatchReference.runOneCycle(flags: flags, target: a.path)
+    GitwatchReference.runOneCycle(flags: flags, target: target(a))
     let model = RepoState.of(a, remote: ra)
 
     let b = TestRepo()
     let rb = remote ? b.addOrigin() : nil
     setup(b, rb)
-    Git.autoCommit(RepoSpecParser.parse(flags + [b.path]).spec!)
+    Git.autoCommit(RepoSpecParser.parse(flags + [target(b)]).spec!)
     let ours = RepoState.of(b, remote: rb)
 
     return (model, ours)
@@ -205,6 +208,32 @@ struct GitwatchParity {
         #expect(r.ours == r.model)
         #expect(r.ours.remoteCommitCount == 3, "seed, theirs, ours: one linear history")
         #expect(r.ours.remoteLastMessage == "cycle")
+    }
+
+    @Test("a subdirectory target: both commit only the subtree")
+    func subdirectoryTarget() {
+        let r = twins(flags: ["-m", "cycle"], remote: false, targetSuffix: "sub") { repo, _ in
+            repo.write("sub/inner.txt", "v1\n")
+            repo.git("add", "-A"); repo.git("commit", "-q", "-m", "seed")
+            repo.write("sub/inner.txt", "v2\n")
+            repo.write("outer.txt", "left alone\n")
+        }
+        #expect(r.ours == r.model)
+        #expect(r.ours.commitCount == 2)
+        #expect(r.ours.pendingChanges == 1, "outer.txt stays uncommitted on both sides")
+    }
+
+    @Test("a file target: both commit only that file")
+    func fileTarget() {
+        let r = twins(flags: ["-m", "cycle"], remote: false, targetSuffix: "a.txt") { repo, _ in
+            repo.write("a.txt", "v1\n")
+            repo.git("add", "-A"); repo.git("commit", "-q", "-m", "seed")
+            repo.write("a.txt", "v2\n")
+            repo.write("b.txt", "left alone\n")
+        }
+        #expect(r.ours == r.model)
+        #expect(r.ours.commitCount == 2)
+        #expect(r.ours.pendingChanges == 1, "b.txt stays uncommitted on both sides")
     }
 
     @Test("-R conflict: both leave the rebase in progress for the user")
