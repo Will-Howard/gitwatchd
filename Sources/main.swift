@@ -185,9 +185,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func togglePause(_ s: NSMenuItem) {
         guard let w = s.representedObject as? RepoWatcher else { return }
-        w.paused.toggle()
-        if !w.paused { w.retryNow() }   // resuming picks a stalled push back up
-        rebuildMenu()
+        // Pause is config-level state so it survives restarts: rewrite the
+        // repo's config line and rebuild from it.
+        Config.setPaused(w.path, !w.paused)
+        reload()
+        if let fresh = watchers.first(where: { $0.path == w.path }), !fresh.paused {
+            fresh.flushNow()   // commit whatever piled up while paused
+        }
     }
     @objc private func retryNow(_ s: NSMenuItem) {
         (s.representedObject as? RepoWatcher)?.retryNow()

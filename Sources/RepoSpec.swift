@@ -19,6 +19,8 @@ struct RepoSpec {
     var exclude: [String] = []        // -x  (repeatable)
     var noMergeCommit: Bool = false   // -M
     var gitDir: String? = nil         // -g  --git-dir
+    var paused: Bool = false          // --paused (gitwatchd extension, not gitwatch:
+                                      // config-level so a pause survives restarts)
     var raw: String = ""              // original line, preserved verbatim
 
     var name: String { (path as NSString).lastPathComponent }
@@ -49,6 +51,7 @@ enum RepoSpecParser {
             case "-M": spec.noMergeCommit = true
             case "-g": if let v = next() { spec.gitDir = v }
             case "-e": _ = next() // inotify events: accepted, no-op on macOS (as upstream)
+            case "--paused": spec.paused = true // gitwatchd extension (see RepoSpec)
             default:
                 if a.hasPrefix("-") {
                     return (nil, "unknown flag \(a)")

@@ -18,7 +18,10 @@ final class RepoWatcher {
     private var retryWork: DispatchWorkItem?
     private let queue = DispatchQueue(label: "gitwatchd.watch")
 
-    var paused = false
+    // Pause is config-level state (--paused on the repo's line) so it survives
+    // restarts; the watcher just mirrors its spec, and toggling goes through
+    // Config.setPaused + reload.
+    var paused: Bool { spec.paused }
 
     /// Error state surfaced in the menu; nil while healthy.
     struct RepoError {

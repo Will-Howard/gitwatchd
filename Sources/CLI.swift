@@ -38,7 +38,7 @@ enum CLI {
         }
 
         // Persist exactly what the user typed (gitwatch-style line).
-        let line = args.map(quoteIfNeeded).joined(separator: " ")
+        let line = args.map(Config.quoteIfNeeded).joined(separator: " ")
         Config.append(line)
         ensureDaemonRunning()
 
@@ -57,7 +57,7 @@ enum CLI {
             let ok = Git.isRepo(s.path)
             let branch = ok ? Git.currentBranch(s.path) : "?"
             let pending = ok ? Git.pendingCount(s.path) : 0
-            let state = !ok ? "⚠ missing" : pending > 0 ? "✎ \(pending) pending" : "✓ idle"
+            let state = !ok ? "⚠ missing" : s.paused ? "⏸ paused" : pending > 0 ? "✎ \(pending) pending" : "✓ idle"
             let dest = s.remote.map { " → \($0)/\(s.branch ?? branch)" } ?? ""
             print("  \(state.padding(toLength: 14, withPad: " ", startingAt: 0)) \(s.name)  (\(s.path))  \(branch)\(dest)")
         }
@@ -237,10 +237,6 @@ enum CLI {
     }
 
     // MARK: - helpers
-
-    private static func quoteIfNeeded(_ s: String) -> String {
-        s.contains(" ") ? "\"\(s)\"" : s
-    }
 
     private static func warn(_ msg: String) { FileHandle.standardError.write(("✗ " + msg + "\n").data(using: .utf8)!) }
 

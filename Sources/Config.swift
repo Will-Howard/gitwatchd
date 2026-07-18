@@ -21,6 +21,8 @@ enum Config {
         # Examples:
         #   ~/code/my-notes
         #   -s 5 -r origin -b main ~/code/blog
+        # gitwatchd extras: --paused (keep the repo listed but don't watch it;
+        # the menu's Pause Watching sets this)
         # (from a terminal, `gitwatchd .` adds the current repo here for you)
         """
         try? template.write(toFile: path, atomically: true, encoding: .utf8)
@@ -75,6 +77,45 @@ enum Config {
         }
         try? kept.joined(separator: "\n").write(toFile: path, atomically: true, encoding: .utf8)
         return removed
+    }
+
+    /// Flip the --paused token on the config line watching `repoPath`. Pause
+    /// lives in the config, not app state, so it survives daemon and computer
+    /// restarts. Returns true if a line changed.
+    @discardableResult
+    static func setPaused(_ repoPath: String, _ paused: Bool) -> Bool {
+        guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return false }
+        var changed = false
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map { sub -> String in
+            let line = String(sub)
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty, !trimmed.hasPrefix("#"),
+                  let rewritten = togglingPaused(line: trimmed, path: repoPath, paused: paused)
+            else { return line }
+            changed = true
+            return rewritten
+        }
+        if changed {
+            try? lines.joined(separator: "\n").write(toFile: path, atomically: true, encoding: .utf8)
+        }
+        return changed
+    }
+
+    /// The pure rewrite behind setPaused: if `line` watches `path` and its
+    /// paused state differs, return the line with --paused added (in front)
+    /// or removed; else nil for "leave this line alone".
+    static func togglingPaused(line: String, path: String, paused: Bool) -> String? {
+        let tokens = tokenize(line)
+        guard let spec = RepoSpecParser.parse(tokens, raw: line).spec,
+              spec.path == path, spec.paused != paused else { return nil }
+        var kept = tokens.filter { $0 != "--paused" }
+        if paused { kept.insert("--paused", at: 0) }
+        return kept.map(quoteIfNeeded).joined(separator: " ")
+    }
+
+    /// Quote one argument for a config line (inverse of tokenize's quoting).
+    static func quoteIfNeeded(_ s: String) -> String {
+        s.contains(" ") ? "\"\(s)\"" : s
     }
 
     /// Split a config line into arguments on whitespace, respecting simple single
