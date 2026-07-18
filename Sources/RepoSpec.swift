@@ -15,7 +15,7 @@ struct RepoSpec {
     var branch: String? = nil         // -b
     var rebase: Bool = false          // -R  pull --rebase before push
     var message: String = "gitwatchd auto-commit (%d)"  // -m  (%d -> date)
-    var exclude: [String] = []        // -x  (repeatable)
+    var exclude: String? = nil        // -x  regex; last one wins, as upstream
     var noMergeCommit: Bool = false   // -M
     var commitOnStart: Bool = false   // -f  commit pending changes when watching starts
     var gitDir: String? = nil         // -g  --git-dir
@@ -24,16 +24,12 @@ struct RepoSpec {
 
     var name: String { (path as NSString).lastPathComponent }
 
-    /// True if the -x patterns exclude this changed path. A pattern matches
-    /// the bare file name or the full path (fnmatch, like the inotifywait
-    /// exclude gitwatch feeds -x into). Patterns are repeatable; none means
-    /// nothing is excluded.
     func excludes(_ fullPath: String) -> Bool {
-        guard !exclude.isEmpty else { return false }
-        let name = (fullPath as NSString).lastPathComponent
-        return exclude.contains { pattern in
-            fnmatch(pattern, name, 0) == 0 || fnmatch(pattern, fullPath, 0) == 0
+        guard let exclude, let regex = try? NSRegularExpression(pattern: exclude) else {
+            return false
         }
+        let range = NSRange(fullPath.startIndex..., in: fullPath)
+        return regex.firstMatch(in: fullPath, range: range) != nil
     }
 }
 
@@ -59,7 +55,11 @@ enum RepoSpecParser {
             case "-b": if let v = next() { spec.branch = v }
             case "-R": spec.rebase = true
             case "-m": if let v = next() { spec.message = v }
-            case "-x": if let v = next() { spec.exclude.append(v) }
+            case "-x":
+                guard let v = next(), (try? NSRegularExpression(pattern: v)) != nil else {
+                    return (nil, "-x needs a valid regular expression")
+                }
+                spec.exclude = v
             case "-M": spec.noMergeCommit = true
             case "-f": spec.commitOnStart = true
             case "-g": if let v = next() { spec.gitDir = v }

@@ -16,7 +16,7 @@ struct FlagDefaults {
         #expect(spec.dateFormat == "%Y-%m-%d %H:%M:%S")          // -d default
         #expect(spec.branch == nil)
         #expect(spec.rebase == false)
-        #expect(spec.exclude.isEmpty)
+        #expect(spec.exclude == nil)
         #expect(spec.noMergeCommit == false)
         #expect(spec.commitOnStart == false, "-f is opt-in: a deliberate manual state is not flushed")
         #expect(spec.paused == false)
@@ -41,29 +41,33 @@ struct FlagDefaults {
     }
 }
 
-@Suite("Exclusions (-x), as the help promises")
+@Suite("Exclusions (-x): a regex against the changed path, as upstream")
 struct Exclusions {
 
-    @Test("a glob excludes matching file names anywhere in the repo")
-    func nameGlob() {
-        let spec = RepoSpecParser.parse(["-x", "*.log", "/tmp/x"]).spec!
+    @Test("the regex matches anywhere in the path")
+    func regexMatch() {
+        let spec = RepoSpecParser.parse(["-x", "\\.log$", "/tmp/x"]).spec!
         #expect(spec.excludes("/tmp/x/deep/dir/debug.log"))
-        #expect(!spec.excludes("/tmp/x/notes.txt"))
+        #expect(!spec.excludes("/tmp/x/log.txt"))
     }
 
-    @Test("-x is repeatable and every pattern stays live")
-    func repeatable() {
-        let spec = RepoSpecParser.parse(["-x", "*.log", "-x", "*.tmp", "/tmp/x"]).spec!
-        #expect(spec.excludes("/tmp/x/a.log"))
-        #expect(spec.excludes("/tmp/x/b.tmp"))
-        #expect(!spec.excludes("/tmp/x/c.txt"))
-    }
-
-    @Test("a full-path pattern excludes a subtree")
-    func fullPathPattern() {
-        let spec = RepoSpecParser.parse(["-x", "/tmp/x/build/*", "/tmp/x"]).spec!
+    @Test("a directory pattern excludes a subtree")
+    func subtreePattern() {
+        let spec = RepoSpecParser.parse(["-x", "build/", "/tmp/x"]).spec!
         #expect(spec.excludes("/tmp/x/build/out.o"))
         #expect(!spec.excludes("/tmp/x/src/out.o"))
+    }
+
+    @Test("the last -x wins, as upstream's getopts does")
+    func lastWins() {
+        let spec = RepoSpecParser.parse(["-x", "\\.log$", "-x", "\\.tmp$", "/tmp/x"]).spec!
+        #expect(spec.excludes("/tmp/x/b.tmp"))
+        #expect(!spec.excludes("/tmp/x/a.log"))
+    }
+
+    @Test("an invalid regex is a parse error, not a silent no-op")
+    func invalidPattern() {
+        #expect(RepoSpecParser.parse(["-x", "*.log", "/tmp/x"]).error != nil)
     }
 
     @Test("without -x nothing is excluded")

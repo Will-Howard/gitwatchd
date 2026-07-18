@@ -1,7 +1,5 @@
 import Foundation
 
-/// A config entry that can't be watched. A config line must never vanish
-/// silently; the menu and `gitwatchd ls` both render these.
 struct ConfigError {
     let label: String       // repo name, or the offending line for parse errors
     let reason: String      // short fixed vocabulary, e.g. "repo not found"
@@ -149,10 +147,8 @@ enum Config {
         return kept.map(quoteIfNeeded).joined(separator: " ")
     }
 
-    /// Quote one argument for a config line (inverse of tokenize's quoting).
-    /// A value containing a double quote is single-quoted and vice versa; the
-    /// tokenizer has no escape syntax, so a value containing BOTH quote kinds
-    /// cannot round-trip and keeps double quotes.
+    // The tokenizer has no escape syntax: a value with both quote kinds
+    // cannot round-trip.
     static func quoteIfNeeded(_ s: String) -> String {
         if s.contains("\""), !s.contains("'") { return "'\(s)'" }
         if s.contains(" ") || s.contains("\"") || s.contains("'") { return "\"\(s)\"" }

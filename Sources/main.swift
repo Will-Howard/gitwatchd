@@ -76,10 +76,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         watchers.forEach { $0.start() }
-        // Flush on transitions: a repo resumed by any route (menu, CLI, hand
-        // edit) commits whatever piled up while paused, and a newly watched
-        // repo with -f commits anything already pending (gitwatch's
-        // commit-on-start; at daemon launch every -f repo is "new").
         for w in watchers where !w.paused {
             let resumed = previouslyPaused.contains(w.path)
             let newlyWatched = !previousPaths.contains(w.path)

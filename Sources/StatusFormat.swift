@@ -24,8 +24,6 @@ enum StatusFormat {
         truncated("⚠ \(label) · \(reason)", max: 48)
     }
 
-    /// The CLI `ls` state column; same vocabulary as the menu-row tails.
-    /// (Unwatchable entries render as error rows, not a state.)
     static func cliState(paused: Bool, pending: Int) -> String {
         if paused { return "⏸ paused" }
         if pending > 0 { return "✎ \(pending) pending" }

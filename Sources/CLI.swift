@@ -316,7 +316,8 @@ enum CLI {
                         Default: "gitwatchd auto-commit (%d)".
           -d <fmt>      strftime format for that timestamp (see `man date`).
                         Default: "%Y-%m-%d %H:%M:%S".
-          -x <pattern>  Exclude files matching this glob. Repeatable.
+          -x <pattern>  Skip changes whose path matches this regular
+                        expression (e.g. '\\.log$' or 'build/').
           -M            Skip committing while the repo has a merge in progress.
           -f            Commit anything already pending as soon as watching
                         starts (daemon launch, or when the repo is added).
