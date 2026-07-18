@@ -48,7 +48,7 @@ enum RepoSpecParser {
             case "-x": if let v = next() { spec.exclude.append(v) }
             case "-M": spec.noMergeCommit = true
             case "-g": if let v = next() { spec.gitDir = v }
-            case "-e": _ = next() // inotify events — accepted, no-op on macOS (as upstream)
+            case "-e": _ = next() // inotify events: accepted, no-op on macOS (as upstream)
             default:
                 if a.hasPrefix("-") {
                     return (nil, "unknown flag \(a)")

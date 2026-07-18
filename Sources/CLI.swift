@@ -19,7 +19,7 @@ enum CLI {
         case "autostart":            return autostart(Array(args.dropFirst()))
         case "add":                  return add(Array(args.dropFirst()))
         default:
-            // Bare form: `gitwatchd [flags] <target>` — implicit add.
+            // Bare form: `gitwatchd [flags] <target>`: implicit add.
             return add(args)
         }
     }
@@ -52,10 +52,10 @@ enum CLI {
 
     private static func list() -> Int32 {
         let specs = Config.specs()
-        if specs.isEmpty { print("No repos watched. Add one:  gitwatchd ."); return 0 }
+        if specs.isEmpty { print("No repos watched."); return 0 }
         for s in specs {
             let ok = Git.isRepo(s.path)
-            let branch = ok ? Git.currentBranch(s.path) : "—"
+            let branch = ok ? Git.currentBranch(s.path) : "?"
             let pending = ok ? Git.pendingCount(s.path) : 0
             let state = !ok ? "⚠ missing" : pending > 0 ? "✎ \(pending) pending" : "✓ idle"
             let dest = s.remote.map { " → \($0)/\(s.branch ?? branch)" } ?? ""
@@ -87,7 +87,7 @@ enum CLI {
     }
 
     /// Internal, undocumented dev diagnostic (not in `help`): shows the environment
-    /// the login-launched DAEMON will use for git — the "works in terminal, fails
+    /// the login-launched DAEMON will use for git: the "works in terminal, fails
     /// from the app" trap, made visible. Kept for debugging, not a user-facing feature.
     private static func doctor() -> Int32 {
         let (env, captureError) = GitRuntime.loginShellEnv()   // what the daemon re-derives
@@ -102,14 +102,14 @@ enum CLI {
             let keys = capture("/usr/bin/ssh-add", ["-l"], env)
             let n = keys.code == 0 ? keys.out.split(separator: "\n").count : 0
             print("  SSH_AUTH_SOCK  present · \(n) key\(n == 1 ? "" : "s") in agent")
-            if n == 0 { print("                 ⚠ no keys loaded — SSH pushes may fail. Add: ssh-add --apple-use-keychain ~/.ssh/id_ed25519") }
+            if n == 0 { print("                 ⚠ no keys loaded: SSH pushes may fail. Add: ssh-add --apple-use-keychain ~/.ssh/id_ed25519") }
         } else {
             print("  SSH_AUTH_SOCK  (unset) ⚠ SSH pushes will fail from the daemon")
         }
 
         let hook = GitRuntime.envHookPath
         let hasHook = FileManager.default.fileExists(atPath: hook)
-        print("  env.sh hook    \(hasHook ? hook : "(none — create it to inject custom auth: tokens, ssh-add, GIT_SSH)")")
+        print("  env.sh hook    \(hasHook ? hook : "(none: create it to inject custom auth: tokens, ssh-add, GIT_SSH)")")
         return 0
     }
 
@@ -198,7 +198,7 @@ enum CLI {
 
     private static func printUsage() {
         print("""
-        gitwatchd — always-on gitwatch daemon
+        gitwatchd: always-on gitwatch daemon
 
         USAGE
           gitwatchd [gitwatch flags] <path>   watch a repo (gitwatch-compatible)

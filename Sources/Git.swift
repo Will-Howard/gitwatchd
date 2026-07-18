@@ -1,8 +1,42 @@
 import Foundation
 
-// Thin wrapper around /usr/bin/git. No external deps — this plus FSEvents is the
-// whole engine. Behavior mirrors gitwatch: debounced auto-commit, optional push
-// to a remote/branch, optional pull --rebase, optional merge-commit guard.
+// Thin wrapper around git. No external deps: this plus FSEvents is the whole
+// engine. Behavior mirrors gitwatch: debounced auto-commit, optional push to a
+// remote/branch, optional pull --rebase, optional merge-commit guard.
+
+/// What one auto-commit cycle (or push retry) accomplished. The git commands and
+/// their order are gitwatch's; this only reports the result in a form the menu
+/// and tests can inspect, instead of a bare status string.
+enum CommitOutcome: Equatable {
+    case clean                            // nothing to commit
+    case skippedMerge                     // -M: merge in progress, cycle skipped
+    case committed                        // committed; no remote configured
+    case pushed                           // committed and pushed
+    case commitFailed(detail: String)
+    case rebaseConflict(detail: String)   // -R: pull --rebase hit a conflict
+    case pushFailed(detail: String)
+
+    /// Menu-row label when this outcome is an error state, nil when healthy.
+    var failureLabel: String? {
+        switch self {
+        case .pushFailed:     return "push failing"
+        case .rebaseConflict: return "rebase conflict"
+        case .commitFailed:   return "commit failing"
+        default:              return nil
+        }
+    }
+
+    var isFailure: Bool { failureLabel != nil }
+
+    /// The captured git error line; nil for non-error outcomes.
+    var detail: String? {
+        switch self {
+        case .commitFailed(let d), .rebaseConflict(let d), .pushFailed(let d): return d
+        default: return nil
+        }
+    }
+}
+
 enum Git {
     @discardableResult
     static func run(_ args: [String], in dir: String, gitDir: String? = nil) -> (code: Int32, out: String) {
@@ -52,30 +86,56 @@ enum Git {
         return FileManager.default.fileExists(atPath: (gitDirPath as NSString).appendingPathComponent("MERGE_HEAD"))
     }
 
-    /// Stage all, commit (honoring -m/-d/-M), then optionally pull --rebase (-R) and
-    /// push (-r/-b). Returns a short human status.
+    /// Stage all, commit (honoring -m/-d/-M), then optionally pull --rebase (-R)
+    /// and push (-r/-b). One gitwatch cycle.
     @discardableResult
-    static func autoCommit(_ spec: RepoSpec) -> String {
+    static func autoCommit(_ spec: RepoSpec) -> CommitOutcome {
         let dir = spec.path
-        if spec.noMergeCommit && hasMergeInProgress(dir) { return "merge in progress — skipped" }
-        guard pendingCount(dir) > 0 else { return "clean" }
+        if spec.noMergeCommit && hasMergeInProgress(dir) { return .skippedMerge }
+        guard pendingCount(dir) > 0 else { return .clean }
 
         run(["add", "-A"], in: dir, gitDir: spec.gitDir)
         let msg = spec.message.replacingOccurrences(
             of: "%d", with: RepoSpecParser.formattedDate(spec.dateFormat))
         let commit = run(["commit", "-m", msg], in: dir, gitDir: spec.gitDir)
-        guard commit.code == 0 else { return "commit failed" }
+        guard commit.code == 0 else { return .commitFailed(detail: errorSummary(commit.out)) }
+        guard spec.remote != nil else { return .committed }
+        return push(spec)
+    }
 
-        guard let remote = spec.remote else { return "committed" }
+    /// The push stage of a cycle: pull --rebase first when -R, then push, exactly
+    /// as it runs at the end of autoCommit. Split out so a failed push can be
+    /// retried later without re-running the commit stage (the commit already
+    /// exists; gitwatch itself never retries because it only pushes right after
+    /// a commit).
+    @discardableResult
+    static func push(_ spec: RepoSpec) -> CommitOutcome {
+        guard let remote = spec.remote else { return .committed }
+        let dir = spec.path
         let branch = spec.branch ?? currentBranch(dir)
         if spec.rebase {
             let pull = run(["pull", "--rebase", remote, branch], in: dir, gitDir: spec.gitDir)
             if pull.code != 0 {
-                run(["rebase", "--abort"], in: dir, gitDir: spec.gitDir) // non-destructive
-                return "committed (rebase conflict — push paused)"
+                // Known divergence from upstream (gitwatch leaves the rebase in
+                // progress and relies on -M); tracked in CLAUDE.local.md.
+                run(["rebase", "--abort"], in: dir, gitDir: spec.gitDir)
+                return .rebaseConflict(detail: errorSummary(pull.out))
             }
         }
-        let push = run(["push", remote, branch], in: dir, gitDir: spec.gitDir)
-        return push.code == 0 ? "committed + pushed" : "committed (push failed)"
+        let p = run(["push", remote, branch], in: dir, gitDir: spec.gitDir)
+        return p.code == 0 ? .pushed : .pushFailed(detail: errorSummary(p.out))
+    }
+
+    /// The most informative line of a failed command's output: the first
+    /// error/fatal/rejection line if there is one, else the last non-empty line.
+    static func errorSummary(_ out: String) -> String {
+        let lines = out.split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        if let hit = lines.first(where: { l in
+            l.hasPrefix("error:") || l.hasPrefix("fatal:")
+                || l.hasPrefix("! [rejected]") || l.hasPrefix("! [remote rejected]")
+        }) { return hit }
+        return lines.last ?? "unknown git error"
     }
 }

@@ -1,0 +1,149 @@
+import Foundation
+import Testing
+
+// Engine tests drive Git.autoCommit / Git.push against real throwaway git
+// repos, asserting both the reported outcome and the repo state left behind
+// (the gitwatch parity contract: same commands, same end state).
+
+@Suite("One auto-commit cycle (gitwatch semantics)")
+struct AutoCommitCycle {
+
+    @Test("a clean repo does nothing and reports clean")
+    func cleanRepo() {
+        let repo = TestRepo()
+        repo.write("seed.txt", "v1")
+        Git.autoCommit(repo.spec())          // absorb the initial commit
+        #expect(Git.autoCommit(repo.spec()) == .clean)
+        #expect(repo.commitCount == 1, "no extra commit should appear")
+    }
+
+    @Test("changes commit locally when no remote is configured")
+    func commitWithoutRemote() {
+        let repo = TestRepo()
+        repo.write("notes.txt", "hello")
+        #expect(Git.autoCommit(repo.spec()) == .committed)
+        #expect(repo.commitCount == 1)
+        #expect(repo.lastMessage.hasPrefix("gitwatchd auto-commit"),
+                "default message expected, got: \(repo.lastMessage)")
+    }
+
+    @Test("-m sets the commit message and %d expands to a date")
+    func customMessage() {
+        let repo = TestRepo()
+        repo.write("a.txt", "1")
+        Git.autoCommit(repo.spec("-m", "saved on %d", "-d", "%Y"))
+        #expect(repo.lastMessage.hasPrefix("saved on 2"),   // "saved on 2026"
+                "got: \(repo.lastMessage)")
+    }
+
+    @Test("with -r origin the commit is pushed to the remote")
+    func pushToRemote() {
+        let repo = TestRepo()
+        let origin = repo.addOrigin()
+        repo.write("a.txt", "1")
+        #expect(Git.autoCommit(repo.spec("-r", "origin", "-b", "main")) == .pushed)
+        #expect(origin.commitCount == 1, "the remote should have the commit")
+    }
+}
+
+@Suite("Push failures (fire-and-forget, now visible)")
+struct PushFailures {
+
+    @Test("an unreachable remote reports pushFailed but the commit survives locally")
+    func unreachableRemote() {
+        let repo = TestRepo()
+        repo.addOrigin(TestDirs.root + "/not-a-remote.git")
+        repo.write("a.txt", "1")
+        let outcome = Git.autoCommit(repo.spec("-r", "origin", "-b", "main"))
+        guard case .pushFailed(let detail) = outcome else {
+            Issue.record("expected pushFailed, got \(outcome)")
+            return
+        }
+        #expect(!detail.isEmpty, "the git error is captured for the menu")
+        #expect(repo.commitCount == 1, "gitwatch parity: commit stays, only the push failed")
+    }
+
+    @Test("Git.push retries the stranded commit once the remote is reachable again")
+    func retryAfterOutage() {
+        let repo = TestRepo()
+        let origin = BareRemote()
+        repo.addOrigin(TestDirs.root + "/offline.git")   // remote "down"
+        repo.write("a.txt", "1")
+        guard case .pushFailed = Git.autoCommit(repo.spec("-r", "origin", "-b", "main")) else {
+            Issue.record("setup: expected the first push to fail")
+            return
+        }
+        repo.setOriginURL(origin.path)                    // remote "back up"
+        #expect(Git.push(repo.spec("-r", "origin", "-b", "main")) == .pushed)
+        #expect(origin.commitCount == 1, "the earlier commit reached the remote")
+    }
+
+    @Test("retrying with nothing left to push still reports pushed")
+    func idempotentRetry() {
+        let repo = TestRepo()
+        repo.addOrigin()
+        repo.write("a.txt", "1")
+        let spec = repo.spec("-r", "origin", "-b", "main")
+        Git.autoCommit(spec)
+        #expect(Git.push(spec) == .pushed)   // "Everything up-to-date"
+    }
+}
+
+@Suite("Merge guard (-M)")
+struct MergeGuard {
+
+    @Test("-M skips the cycle while a merge is in progress")
+    func skipsMidMerge() {
+        let repo = TestRepo.withConflictedMerge()
+        #expect(repo.midMerge, "setup: repo should be mid-merge")
+        #expect(Git.autoCommit(repo.spec("-M")) == .skippedMerge)
+        #expect(repo.midMerge, "the merge is left exactly as it was")
+    }
+
+    @Test("without -M a mid-merge cycle commits, conflict markers and all (gitwatch parity)")
+    func commitsMidMergeWithoutFlag() {
+        let repo = TestRepo.withConflictedMerge()
+        #expect(Git.autoCommit(repo.spec()) == .committed)
+        #expect(!repo.midMerge, "the commit concluded the merge, as gitwatch would")
+    }
+}
+
+@Suite("Commit and rebase failures")
+struct CommitAndRebaseFailures {
+
+    @Test("a failing pre-commit hook reports commitFailed with the hook's complaint")
+    func failingHook() {
+        let repo = TestRepo()
+        repo.installFailingPreCommitHook(printing: "lint says no")
+        repo.write("a.txt", "1")
+        let outcome = Git.autoCommit(repo.spec())
+        guard case .commitFailed(let detail) = outcome else {
+            Issue.record("expected commitFailed, got \(outcome)")
+            return
+        }
+        #expect(detail.contains("lint says no"), "hook output surfaces: got \(detail)")
+    }
+
+    @Test("-R reports rebaseConflict when the remote diverged incompatibly")
+    func rebaseConflict() {
+        let repo = TestRepo()
+        let origin = repo.addOrigin()
+        repo.write("shared.txt", "original\n")
+        Git.autoCommit(repo.spec("-r", "origin", "-b", "main"))
+
+        let colleague = TestRepo(cloneOf: origin)         // someone else pushes first
+        colleague.write("shared.txt", "colleague's version\n")
+        Git.autoCommit(colleague.spec("-r", "origin", "-b", "main"))
+
+        repo.write("shared.txt", "our conflicting version\n")
+        let outcome = Git.autoCommit(repo.spec("-r", "origin", "-b", "main", "-R"))
+        guard case .rebaseConflict = outcome else {
+            Issue.record("expected rebaseConflict, got \(outcome)")
+            return
+        }
+        // Today we abort the rebase: a known, documented divergence from
+        // gitwatch, which leaves it in progress (see CLAUDE.local.md).
+        #expect(!repo.midRebase, "current behaviour: rebase aborted, repo usable")
+        #expect(repo.commitCount == 2, "our commit still exists locally")
+    }
+}

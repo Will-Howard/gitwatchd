@@ -1,17 +1,17 @@
-# gitwatchd — Xcode-free build for a macOS menu-bar app.
+# gitwatchd: Xcode-free build for a macOS menu-bar app.
 # Compiles with swiftc and hand-assembles a .app bundle. No .xcodeproj, no Xcode.app.
 #
-# Tier 1 — dev:
+# Tier 1: dev:
 #   make          build build/gitwatchd.app
-#   make run      build, then (re)launch from build/ — the dev loop
+#   make run      build, then (re)launch from build/: the dev loop
 #   make stop     kill any running instance
 #   make clean    remove build artifacts
 #
-# Tier 2 — local install (no sudo):
+# Tier 2: local install (no sudo):
 #   make install    → /Applications + CLI on PATH + launch; self-registers launch-at-login
 #   make uninstall  remove app, CLI link, login item, and first-run state (re-onboards next install)
 #
-# Tier 3 — distribution (needs a paid Apple Developer account):
+# Tier 3: distribution (needs a paid Apple Developer account):
 #   make sign-release DEV_ID="Developer ID Application: NAME (TEAMID)"
 #   make notarize     NOTARY_PROFILE=<notarytool keychain profile>
 
@@ -31,7 +31,7 @@ SWIFT_FLAGS := -O -framework AppKit -framework CoreServices -framework ServiceMa
 DEV_ID         ?=
 NOTARY_PROFILE ?= gitwatchd-notary
 
-.PHONY: all run stop clean install uninstall sign-release notarize
+.PHONY: all run stop clean install uninstall sign-release notarize test
 
 all: $(APP_BUNDLE)
 
@@ -44,6 +44,29 @@ $(APP_BUNDLE): $(SOURCES) Resources/Info.plist Makefile
 	@codesign --force --sign - $(APP_BUNDLE) 2>/dev/null || true
 	@echo "✓ built $(APP_BUNDLE)"
 
+# Tests: Swift Testing (@Test / #expect) via bare swiftc; still no SPM, no
+# .xcodeproj. Engine + formatting sources compile together with Tests/ into one
+# binary (Sources/main.swift is excluded: an app can't share top-level code
+# with a test runner; Tests/main.swift hands the process to the test runner).
+# Testing.framework ships with full Xcode, not the Command Line Tools, so this
+# target needs Xcode installed; the app build itself does not.
+TEST_BIN      := $(BUILD_DIR)/gitwatchd-tests
+TEST_SOURCES  := $(filter-out Sources/main.swift,$(SOURCES)) $(wildcard Tests/*.swift)
+PLATFORM_FWKS  = $(shell xcrun --show-sdk-platform-path 2>/dev/null)/Developer/Library/Frameworks
+SWIFT_PLUGINS  = $(shell dirname $$(dirname $$(xcrun -f swiftc)))/lib/swift/host/plugins/testing
+
+test:
+	@test -d "$(PLATFORM_FWKS)/Testing.framework" || \
+		{ echo "✗ Testing.framework not found. Tests need full Xcode installed (the app build doesn't)."; exit 1; }
+	@echo "→ building tests"
+	@mkdir -p $(BUILD_DIR)
+	@$(SWIFTC) $(SWIFT_FLAGS) $(TEST_SOURCES) \
+		-F "$(PLATFORM_FWKS)" \
+		-plugin-path "$(SWIFT_PLUGINS)" \
+		-Xlinker -rpath -Xlinker "$(PLATFORM_FWKS)" \
+		-o $(TEST_BIN)
+	@$(TEST_BIN)
+
 run: stop all
 	@echo "→ launching $(APP_NAME) (dev, from build/)"
 	@open $(APP_BUNDLE)
@@ -53,11 +76,11 @@ stop:
 
 # --- Tier 2: local install / uninstall ---
 # Sudo-free: app → /Applications (or ~/Applications), CLI symlinked onto PATH, then
-# launch — the daemon self-registers launch-at-login on the first run of an installed copy.
+# launch: the daemon self-registers launch-at-login on the first run of an installed copy.
 
 install: all
 	@pkill -x $(APP_NAME) 2>/dev/null || true
-	@# App destination — prefer /Applications, fall back to ~/Applications. No sudo.
+	@# App destination: prefer /Applications, fall back to ~/Applications. No sudo.
 	@if [ -w /Applications ]; then APP_DEST=/Applications; \
 	else APP_DEST="$$HOME/Applications"; mkdir -p "$$APP_DEST"; fi; \
 	rm -rf "$$APP_DEST/$(APP_NAME).app"; \
@@ -78,7 +101,7 @@ install: all
 		echo "  ⚠ no writable bin dir found. Link manually:  ln -sf \"$$INNER\" /usr/local/bin/$(APP_NAME)"; \
 	fi; \
 	open "$$APP_DEST/$(APP_NAME).app"
-	@echo "✓ launched $(APP_NAME) — menu-bar icon, top-right; starts at login (approve once in System Settings)"
+	@echo "✓ launched $(APP_NAME): menu-bar icon, top-right; starts at login (approve once in System Settings)"
 	@echo "  Next:  $(APP_NAME) .   to watch the current repo"
 
 uninstall:
@@ -93,7 +116,7 @@ uninstall:
 	done; true
 	@rm -rf "$$HOME/Library/Application Support/$(APP_NAME)"
 	@echo "✓ uninstalled: app, CLI link, login item, and first-run state cleared"
-	@echo "  (config at ~/.config/$(APP_NAME) kept — 'rm -rf ~/.config/$(APP_NAME)' to reset watched repos too)"
+	@echo "  (config at ~/.config/$(APP_NAME) kept: 'rm -rf ~/.config/$(APP_NAME)' to reset watched repos too)"
 
 # --- Tier 3: Developer ID sign + notarize (entirely CLI; no Xcode.app) ---
 

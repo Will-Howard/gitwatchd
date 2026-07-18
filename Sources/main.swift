@@ -1,7 +1,7 @@
 import AppKit
 import CoreServices
 
-// gitwatchd — one binary, two modes:
+// gitwatchd: one binary, two modes:
 //   • launched as gitwatchd.app (or `gitwatchd serve`) → menu-bar daemon (this file)
 //   • run with CLI args (e.g. `gitwatchd .`)           → CLI.run (CLI.swift)
 // The menu-bar daemon watches ~/.config/gitwatchd/repos.txt, live-reloads on edit,
@@ -12,8 +12,8 @@ import CoreServices
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var watchers: [RepoWatcher] = []
-    private var lastActivity: [String: String] = [:] // path -> status word
     private var configWatcher: FileWatcher?
+    private var networkMonitor: NetworkMonitor?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -28,9 +28,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSLog("gitwatchd: shell environment capture FAILED: %@", envError)
         }
         if let msg = LaunchAtLogin.enableOnFirstInstalledRunIfNeeded() {
-            NSLog("gitwatchd: first run — %@", msg)
+            NSLog("gitwatchd: first run: %@", msg)
         }
         reload()
+
+        // When the network comes back after an outage, retry any repo stuck on
+        // a failed push right away instead of waiting out its backoff.
+        networkMonitor = NetworkMonitor { [weak self] in
+            DispatchQueue.main.async {
+                self?.watchers.filter { $0.wantsNetworkRetry }.forEach { $0.retryNow() }
+            }
+        }
+        networkMonitor?.start()
 
         // Live-reload when the config file (or CLI) changes it.
         configWatcher = FileWatcher(path: Config.dir) { [weak self] in
@@ -50,11 +59,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         watchers = Config.specs()
             .filter { Git.isRepo($0.path) }
             .map { spec in
-                RepoWatcher(spec: spec) { [weak self] watcher, status in
-                    DispatchQueue.main.async {
-                        self?.lastActivity[watcher.path] = status
-                        self?.rebuildMenu()
-                    }
+                RepoWatcher(spec: spec) { [weak self] _, _ in
+                    DispatchQueue.main.async { self?.rebuildMenu() }
                 }
             }
         watchers.forEach { $0.start() }
@@ -64,9 +70,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: Menu
 
     private func rebuildMenu() {
+        updateIcon()
         let menu = NSMenu()
 
-        // If the login-shell environment failed to load, say so loudly — pushes would
+        // If the login-shell environment failed to load, say so loudly: pushes would
         // silently use the wrong git/PATH otherwise.
         if let envError = GitRuntime.resolved.error {
             add(menu, "⚠ shell environment failed to load", enabled: false)
@@ -76,17 +83,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         if watchers.isEmpty {
             add(menu, "No repos watched yet", enabled: false)
-            add(menu, "Add one:  gitwatchd .", enabled: false)
         } else {
             add(menu, "Watching \(watchers.count) repo\(watchers.count == 1 ? "" : "s")", enabled: false)
             menu.addItem(.separator())
             for w in watchers {
                 let branch = Git.currentBranch(w.path)
                 let pending = Git.pendingCount(w.path)
-                // "name · branch", with a status tail only when there's something to say.
-                var title = "\(w.spec.name) · \(branch)"
-                if w.paused { title += " · ⏸ paused" }
-                else if pending > 0 { title += " · ✎ \(pending) pending" }
+                // "name · branch", with at most one status tail; error detail
+                // stays out of the main menu and lives in the submenu.
+                let title = StatusFormat.rowTitle(
+                    name: w.spec.name, branch: branch, paused: w.paused,
+                    pending: pending, error: w.lastError?.outcome)
                 let row = NSMenuItem(title: title, action: nil, keyEquivalent: "")
                 row.submenu = repoSubmenu(for: w)
                 menu.addItem(row)
@@ -112,6 +119,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func repoSubmenu(for w: RepoWatcher) -> NSMenu {
         let sub = NSMenu()
         add(sub, summarize(w.path), enabled: false)   // head-truncated so rows stay narrow
+        if let err = w.lastError {
+            sub.addItem(.separator())
+            add(sub, StatusFormat.errorHeadline(label: err.outcome.failureLabel ?? "failing",
+                                                attempts: err.attempts), enabled: false)
+            if let detail = err.outcome.detail, !detail.isEmpty {
+                add(sub, "   " + StatusFormat.truncated(detail), enabled: false)
+            }
+            add(sub, "   " + StatusFormat.retryLine(lastTried: err.lastAttempt,
+                                                    nextRetry: err.nextRetry, now: Date()),
+                enabled: false)
+            addAction(sub, "Retry Now", #selector(retryNow(_:)), repo: w)
+        }
         sub.addItem(.separator())
         addAction(sub, w.paused ? "Resume Watching" : "Pause Watching", #selector(togglePause(_:)), repo: w)
         sub.addItem(.separator())
@@ -124,7 +143,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func togglePause(_ s: NSMenuItem) {
         guard let w = s.representedObject as? RepoWatcher else { return }
-        w.paused.toggle(); rebuildMenu()
+        w.paused.toggle()
+        if !w.paused { w.retryNow() }   // resuming picks a stalled push back up
+        rebuildMenu()
+    }
+    @objc private func retryNow(_ s: NSMenuItem) {
+        (s.representedObject as? RepoWatcher)?.retryNow()
     }
     @objc private func openInFinder(_ s: NSMenuItem) {
         guard let w = s.representedObject as? RepoWatcher else { return }
@@ -148,6 +172,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func quit() { NSApplication.shared.terminate(nil) }
 
     // MARK: Helpers
+
+    /// Swap the menu-bar glyph to the attention variant while any repo is in an
+    /// error state, back to the plain sync arrows when all are healthy.
+    private func updateIcon() {
+        let failing = watchers.contains { $0.lastError != nil }
+        let symbol = failing ? "exclamationmark.arrow.triangle.2.circlepath"
+                             : "arrow.triangle.2.circlepath"
+        if let button = statusItem.button {
+            button.image = NSImage(systemSymbolName: symbol,
+                                   accessibilityDescription: failing ? "gitwatchd: attention needed"
+                                                                     : "gitwatchd")
+            button.image?.isTemplate = true
+        }
+    }
 
     private func copyToPasteboard(_ s: String) {
         NSPasteboard.general.clearContents()

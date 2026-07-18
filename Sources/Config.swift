@@ -16,11 +16,12 @@ enum Config {
         try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
         guard !fm.fileExists(atPath: path) else { return }
         let template = """
-        # gitwatchd — one repo per line, using gitwatch's own flags.
+        # gitwatchd: one repo per line, using gitwatch's own flags.
         #   [-s secs] [-r remote [-b branch]] [-R] [-m msg] [-x pattern] [-M] <path>
         # Examples:
         #   ~/code/my-notes
         #   -s 5 -r origin -b main ~/code/blog
+        # (from a terminal, `gitwatchd .` adds the current repo here for you)
         """
         try? template.write(toFile: path, atomically: true, encoding: .utf8)
     }

@@ -2,7 +2,7 @@ import Foundation
 import ServiceManagement
 
 // Launch-at-login via SMAppService (macOS 13+). Registers the app bundle itself
-// as a login item — no helper target, no LaunchAgent plist to author. One caveat:
+// as a login item: no helper target, no LaunchAgent plist to author. One caveat:
 // registration sticks most reliably when the app lives in /Applications, so
 // `make install` copies it there before enabling.
 enum LaunchAtLogin {
@@ -47,7 +47,7 @@ enum LaunchAtLogin {
         (stateDir as NSString).appendingPathComponent("first-run-complete")
     }
 
-    /// On the first launch of an *installed* copy, enable launch-at-login once —
+    /// On the first launch of an *installed* copy, enable launch-at-login once:
     /// always-on is this app's whole point, so this meets the user's stated intent
     /// rather than sneaking past it. Gated so it:
     ///   • never fires for a dev build run from build/ (only /Applications or ~/Applications)
@@ -59,10 +59,10 @@ enum LaunchAtLogin {
         let installedRoots = ["/Applications",
                               (NSHomeDirectory() as NSString).appendingPathComponent("Applications")]
         guard installedRoots.contains(where: { bundlePath.hasPrefix($0 + "/") }) else {
-            return nil   // dev run from build/ — never touch login items or the sentinel
+            return nil   // dev run from build/: never touch login items or the sentinel
         }
         guard !FileManager.default.fileExists(atPath: firstRunSentinel) else {
-            return nil   // already onboarded — respect any later opt-out forever
+            return nil   // already onboarded: respect any later opt-out forever
         }
         let error = set(true)
         try? FileManager.default.createDirectory(atPath: stateDir, withIntermediateDirectories: true)

@@ -5,7 +5,7 @@ import Foundation
 /// A GUI/launchd-launched daemon inherits only a minimal environment: PATH is
 /// just /usr/bin:/bin:/usr/sbin:/sbin and none of your ~/.zshrc exports are set.
 /// It would therefore find a different git than your terminal (missing a Homebrew
-/// git / credential helpers) and miss custom auth — the classic "works in the
+/// git / credential helpers) and miss custom auth: the classic "works in the
 /// terminal, fails from the app" trap. To avoid it, the daemon re-derives your
 /// real login-shell environment (same technique as VS Code / exec-path-from-shell),
 /// optionally sourcing ~/.config/gitwatchd/env.sh for custom auth. The CLI already
@@ -14,7 +14,7 @@ enum GitRuntime {
     /// Set true by the daemon entry point before any git call. Left false for the CLI.
     static var isDaemon = false
 
-    /// Optional user hook sourced during capture — a place to inject auth
+    /// Optional user hook sourced during capture: a place to inject auth
     /// (export tokens, `ssh-add`, set GIT_SSH, …).
     static var envHookPath: String { (Config.dir as NSString).appendingPathComponent("env.sh") }
 
@@ -25,7 +25,7 @@ enum GitRuntime {
     }
 
     /// Resolved once per process: which git to run, in what environment, and whether
-    /// login-shell env capture failed. On failure we DON'T pretend everything is fine —
+    /// login-shell env capture failed. On failure we DON'T pretend everything is fine:
     /// the daemon surfaces the error (menu + log) so a broken env loader is obvious,
     /// rather than silently limping along on a minimal environment.
     static let resolved: Resolution = {
@@ -41,7 +41,7 @@ enum GitRuntime {
 
     /// Run the user's login+interactive shell to source their profile and dump env.
     /// Returns the parsed environment, plus a non-nil error string if capture failed
-    /// (in which case env falls back to the minimal process env — flagged, not hidden).
+    /// (in which case env falls back to the minimal process env: flagged, not hidden).
     static func loginShellEnv() -> (env: [String: String], error: String?) {
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
         let marker = "__GITWATCHD_ENV__"
@@ -69,7 +69,7 @@ enum GitRuntime {
         // A successful capture always yields a PATH; its absence means capture broke.
         guard let parsed = parseEnv(text, marker: marker), parsed["PATH"] != nil else {
             return (ProcessInfo.processInfo.environment,
-                    "login-shell env capture failed — check your \(shell) startup files")
+                    "login-shell env capture failed: check your \(shell) startup files")
         }
         return (parsed, nil)
     }
