@@ -129,10 +129,27 @@ enum CLI {
     private static func config(_ args: [String]) -> Int32 {
         switch args.first {
         case "path", nil: print(Config.path)
-        case "edit": NSWorkspace.shared.open(URL(fileURLWithPath: Config.path))
+        case "edit": return editConfig()
         default: warn("usage: gitwatchd config [path|edit]"); return 1
         }
         return 0
+    }
+
+    /// Open the config in the editor `git commit` would use: `git var
+    /// GIT_EDITOR` resolves $GIT_EDITOR, core.editor, $VISUAL, $EDITOR, then
+    /// vi. Runs in this terminal (the menu's "Open Config File" stays GUI).
+    private static func editConfig() -> Int32 {
+        Config.ensureExists()
+        let r = Git.run(["var", "GIT_EDITOR"], in: FileManager.default.currentDirectoryPath)
+        let editor = (r.code == 0 && !r.out.isEmpty) ? r.out : "vi"
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/sh")
+        // The editor value can be a command with flags (e.g. "code --wait"),
+        // so hand it to the shell; the path rides in as $1, safely quoted.
+        p.arguments = ["-c", "\(editor) \"$1\"", "gitwatchd-edit", Config.path]
+        do { try p.run() } catch { warn("couldn't launch editor '\(editor)': \(error)"); return 1 }
+        p.waitUntilExit()
+        return p.terminationStatus
     }
 
     private static func autostart(_ args: [String]) -> Int32 {
