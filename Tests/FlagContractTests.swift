@@ -18,6 +18,7 @@ struct FlagDefaults {
         #expect(spec.rebase == false)
         #expect(spec.exclude.isEmpty)
         #expect(spec.noMergeCommit == false)
+        #expect(spec.commitOnStart == false, "-f is opt-in: a deliberate manual state is not flushed")
         #expect(spec.paused == false)
     }
 

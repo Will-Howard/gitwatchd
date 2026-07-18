@@ -318,6 +318,8 @@ enum CLI {
                         Default: "%Y-%m-%d %H:%M:%S".
           -x <pattern>  Exclude files matching this glob. Repeatable.
           -M            Skip committing while the repo has a merge in progress.
+          -f            Commit anything already pending as soon as watching
+                        starts (daemon launch, or when the repo is added).
           -g <path>     Location of the .git directory, if elsewhere (--git-dir).
           --paused      Keep the repo in the config but don't watch it. This is
                         what `gitwatchd pause` and the menu's Pause Watching set.

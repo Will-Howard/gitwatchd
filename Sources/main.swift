@@ -64,6 +64,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// be watched (unparseable line, missing path, not a git repo) are kept as
     /// config errors for the menu; a config line must never vanish silently.
     private func reload() {
+        let previousPaths = Set(watchers.map { $0.path })
         let previouslyPaused = Set(watchers.filter { $0.paused }.map { $0.path })
         watchers.forEach { $0.stop() }
         let (watchable, errors) = Config.load()
@@ -75,10 +76,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         watchers.forEach { $0.start() }
-        // A repo resumed by any route (menu, CLI, hand edit) should commit
-        // whatever piled up while it was paused, not wait for the next change.
-        for w in watchers where previouslyPaused.contains(w.path) && !w.paused {
-            w.flushNow()
+        // Flush on transitions: a repo resumed by any route (menu, CLI, hand
+        // edit) commits whatever piled up while paused, and a newly watched
+        // repo with -f commits anything already pending (gitwatch's
+        // commit-on-start; at daemon launch every -f repo is "new").
+        for w in watchers where !w.paused {
+            let resumed = previouslyPaused.contains(w.path)
+            let newlyWatched = !previousPaths.contains(w.path)
+            if resumed || (newlyWatched && w.spec.commitOnStart) { w.flushNow() }
         }
         rebuildMenu()
     }

@@ -17,6 +17,7 @@ struct RepoSpec {
     var message: String = "gitwatchd auto-commit (%d)"  // -m  (%d -> date)
     var exclude: [String] = []        // -x  (repeatable)
     var noMergeCommit: Bool = false   // -M
+    var commitOnStart: Bool = false   // -f  commit pending changes when watching starts
     var gitDir: String? = nil         // -g  --git-dir
     var paused: Bool = false          // --paused (gitwatchd extension, not gitwatch:
                                       // config-level so a pause survives restarts)
@@ -60,6 +61,7 @@ enum RepoSpecParser {
             case "-m": if let v = next() { spec.message = v }
             case "-x": if let v = next() { spec.exclude.append(v) }
             case "-M": spec.noMergeCommit = true
+            case "-f": spec.commitOnStart = true
             case "-g": if let v = next() { spec.gitDir = v }
             case "-e": _ = next() // inotify events: accepted, no-op on macOS (as upstream)
             case "--paused": spec.paused = true // gitwatchd extension (see RepoSpec)
