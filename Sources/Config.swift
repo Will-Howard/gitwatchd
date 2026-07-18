@@ -119,8 +119,13 @@ enum Config {
     }
 
     /// Quote one argument for a config line (inverse of tokenize's quoting).
+    /// A value containing a double quote is single-quoted and vice versa; the
+    /// tokenizer has no escape syntax, so a value containing BOTH quote kinds
+    /// cannot round-trip and keeps double quotes.
     static func quoteIfNeeded(_ s: String) -> String {
-        s.contains(" ") ? "\"\(s)\"" : s
+        if s.contains("\""), !s.contains("'") { return "'\(s)'" }
+        if s.contains(" ") || s.contains("\"") || s.contains("'") { return "\"\(s)\"" }
+        return s
     }
 
     /// Split a config line into arguments on whitespace, respecting simple single

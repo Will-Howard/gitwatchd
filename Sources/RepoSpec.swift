@@ -48,7 +48,11 @@ enum RepoSpecParser {
         while i < args.count {
             let a = args[i]
             switch a {
-            case "-s": if let v = next(), let d = Double(v) { spec.settle = d }
+            case "-s":
+                guard let v = next(), let d = Double(v), d >= 0 else {
+                    return (nil, "-s needs a number of seconds, 0 or more")
+                }
+                spec.settle = d
             case "-d": if let v = next() { spec.dateFormat = v }
             case "-r", "-p": if let v = next() { spec.remote = v } // -p: upstream's alias of -r
             case "-b": if let v = next() { spec.branch = v }

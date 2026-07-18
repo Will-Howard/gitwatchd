@@ -31,6 +31,13 @@ struct FlagDefaults {
         #expect(RepoSpecParser.parse(["-l", "5", "/tmp/x"]).error != nil)
         #expect(RepoSpecParser.parse(["-L", "5", "/tmp/x"]).error != nil)
     }
+
+    @Test("-s rejects negative and non-numeric values instead of ignoring them")
+    func settleValidation() {
+        #expect(RepoSpecParser.parse(["-s", "-1", "/tmp/x"]).error != nil)
+        #expect(RepoSpecParser.parse(["-s", "soon", "/tmp/x"]).error != nil)
+        #expect(RepoSpecParser.parse(["-s", "0", "/tmp/x"]).spec?.settle == 0)
+    }
 }
 
 @Suite("Exclusions (-x), as the help promises")

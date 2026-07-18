@@ -31,6 +31,14 @@ struct PausedConfig {
                 == "--paused -m \"two words\" /tmp/x")
     }
 
+    @Test("messages containing a quote character survive the rewrite")
+    func embeddedQuotes() {
+        #expect(Config.togglingPaused(line: "-m 'say \"hi\"' /tmp/x", path: "/tmp/x", paused: true)
+                == "--paused -m 'say \"hi\"' /tmp/x")
+        #expect(Config.togglingPaused(line: "-m \"don't\" /tmp/x", path: "/tmp/x", paused: true)
+                == "--paused -m \"don't\" /tmp/x")
+    }
+
     @Test("lines for other repos are left alone")
     func otherLines() {
         #expect(Config.togglingPaused(line: "-s 2 /tmp/other", path: "/tmp/x", paused: true) == nil)
