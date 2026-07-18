@@ -105,4 +105,5 @@ final class BareRemote {
         let r = Git.run(["rev-list", "--count", "main"], in: path)
         return r.code == 0 ? Int(r.out) ?? 0 : 0
     }
+    var lastMessage: String { Git.run(["log", "-1", "--pretty=%s", "main"], in: path).out }
 }

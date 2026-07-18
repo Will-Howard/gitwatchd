@@ -318,7 +318,6 @@ enum CLI {
 
         The daemon lives in the menu bar and watches every repo listed in
         ~/.config/gitwatchd/repos.txt (one gitwatch-style line per repo).
-        Edits to that file are picked up live, however they are made.
         """)
     }
 }

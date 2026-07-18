@@ -102,6 +102,81 @@ struct PushFailures {
     }
 }
 
+@Suite("Push command forms (-b), as the help promises")
+struct PushForms {
+
+    @Test("without -b, a plain `git push <remote>` lets git's config decide")
+    func withoutBranch() {
+        let repo = TestRepo()
+        repo.write("a.txt", "1")
+        Git.autoCommit(repo.spec())
+        #expect(Git.pushArgs(remote: "origin", spec: repo.spec("-r", "origin"))
+                == ["push", "origin"])
+    }
+
+    @Test("with -b, the current branch is pushed to it as <current>:<branch>")
+    func withBranch() {
+        let repo = TestRepo()
+        repo.write("a.txt", "1")
+        Git.autoCommit(repo.spec())
+        repo.git("checkout", "-q", "-b", "feature")
+        #expect(Git.pushArgs(remote: "origin", spec: repo.spec("-r", "origin", "-b", "main"))
+                == ["push", "origin", "feature:main"])
+    }
+
+    @Test("from a detached HEAD, -b pushes the branch by name")
+    func detachedHead() {
+        let repo = TestRepo()
+        repo.write("a.txt", "1")
+        Git.autoCommit(repo.spec())
+        repo.git("checkout", "-q", "--detach")
+        #expect(Git.pushArgs(remote: "origin", spec: repo.spec("-r", "origin", "-b", "main"))
+                == ["push", "origin", "main"])
+    }
+
+    @Test("end to end: a commit made on feature lands on the remote's main")
+    func refspecEndToEnd() {
+        let repo = TestRepo()
+        let origin = repo.addOrigin()
+        repo.write("a.txt", "base\n")
+        Git.autoCommit(repo.spec("-r", "origin", "-b", "main"))
+        repo.git("checkout", "-q", "-b", "feature")
+        repo.write("b.txt", "on feature\n")
+        #expect(Git.autoCommit(repo.spec("-r", "origin", "-b", "main", "-m", "from feature"))
+                == .pushed)
+        #expect(origin.commitCount == 2, "the remote's main received the feature commit")
+        #expect(origin.lastMessage == "from feature")
+    }
+}
+
+@Suite("Two-way sync (-R), as the help promises")
+struct TwoWaySync {
+
+    @Test("commits made on another machine are pulled in and ours lands on top")
+    func rebaseThenPush() {
+        let repo = TestRepo()
+        let origin = repo.addOrigin()
+        repo.write("ours.txt", "base\n")
+        Git.autoCommit(repo.spec("-r", "origin", "-b", "main"))
+        // pull --rebase runs with no branch argument (upstream's form), which
+        // needs tracking info, like the cloned repos this is normally run in.
+        repo.git("fetch", "-q", "origin")
+        repo.git("branch", "-q", "--set-upstream-to=origin/main", "main")
+
+        let colleague = TestRepo(cloneOf: origin)
+        colleague.write("theirs.txt", "from the other machine\n")
+        Git.autoCommit(colleague.spec("-r", "origin", "-b", "main", "-m", "made elsewhere"))
+
+        repo.write("ours.txt", "updated here\n")
+        let outcome = Git.autoCommit(repo.spec("-r", "origin", "-b", "main", "-R", "-m", "made here"))
+        #expect(outcome == .pushed)
+        #expect(origin.commitCount == 3, "base, theirs, ours: one linear history")
+        #expect(origin.lastMessage == "made here", "our commit was rebased on top")
+        #expect(repo.git("log", "--pretty=%s").contains("made elsewhere"),
+                "their commit is now part of our local history")
+    }
+}
+
 @Suite("Merge guard (-M)")
 struct MergeGuard {
 

@@ -144,8 +144,8 @@ enum Git {
 
     /// gitwatch's push command: without -b, a bare `push <remote>` (git's
     /// push.default decides); with -b, push `<current>:<branch>`, or just
-    /// `<branch>` from a detached HEAD.
-    private static func pushArgs(remote: String, spec: RepoSpec) -> [String] {
+    /// `<branch>` from a detached HEAD. Internal so tests can pin the forms.
+    static func pushArgs(remote: String, spec: RepoSpec) -> [String] {
         guard let branch = spec.branch else { return ["push", remote] }
         let head = run(["symbolic-ref", "HEAD"], in: spec.path, gitDir: spec.gitDir)
         guard head.code == 0 else { return ["push", remote, branch] }
