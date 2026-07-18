@@ -20,6 +20,17 @@ struct FlagDefaults {
         #expect(spec.noMergeCommit == false)
         #expect(spec.paused == false)
     }
+
+    @Test("-p is accepted as an alias of -r, as upstream treats it")
+    func pAlias() {
+        #expect(RepoSpecParser.parse(["-p", "origin", "/tmp/x"]).spec?.remote == "origin")
+    }
+
+    @Test("-l and -L are rejected, not silently ignored")
+    func logFlagsRejected() {
+        #expect(RepoSpecParser.parse(["-l", "5", "/tmp/x"]).error != nil)
+        #expect(RepoSpecParser.parse(["-L", "5", "/tmp/x"]).error != nil)
+    }
 }
 
 @Suite("Exclusions (-x), as the help promises")

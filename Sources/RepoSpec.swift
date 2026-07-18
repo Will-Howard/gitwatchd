@@ -50,11 +50,10 @@ enum RepoSpecParser {
             switch a {
             case "-s": if let v = next(), let d = Double(v) { spec.settle = d }
             case "-d": if let v = next() { spec.dateFormat = v }
-            case "-r": if let v = next() { spec.remote = v }
+            case "-r", "-p": if let v = next() { spec.remote = v } // -p: upstream's alias of -r
             case "-b": if let v = next() { spec.branch = v }
             case "-R": spec.rebase = true
             case "-m": if let v = next() { spec.message = v }
-            case "-l", "-L": _ = next() // diff-in-message: accepted, not implemented (parity gap)
             case "-x": if let v = next() { spec.exclude.append(v) }
             case "-M": spec.noMergeCommit = true
             case "-g": if let v = next() { spec.gitDir = v }
