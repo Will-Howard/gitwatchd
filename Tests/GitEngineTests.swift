@@ -78,6 +78,19 @@ struct PushFailures {
         #expect(origin.commitCount == 1, "the earlier commit reached the remote")
     }
 
+    @Test("-R against an unreachable remote is a transient push failure, not a conflict")
+    func pullFailureWhileOffline() {
+        let repo = TestRepo()
+        repo.addOrigin(TestDirs.root + "/gone.git")
+        repo.write("a.txt", "1")
+        let outcome = Git.autoCommit(repo.spec("-r", "origin", "-b", "main", "-R"))
+        guard case .pushFailed = outcome else {
+            Issue.record("expected pushFailed, got \(outcome)")
+            return
+        }
+        #expect(!repo.midRebase, "no rebase was ever started, so the retry loop may heal this")
+    }
+
     @Test("retrying with nothing left to push still reports pushed")
     func idempotentRetry() {
         let repo = TestRepo()
@@ -130,6 +143,10 @@ struct CommitAndRebaseFailures {
         let origin = repo.addOrigin()
         repo.write("shared.txt", "original\n")
         Git.autoCommit(repo.spec("-r", "origin", "-b", "main"))
+        // Upstream runs `pull --rebase <remote>` with no branch argument, which
+        // needs tracking info, just like the cloned repos gitwatch users run in.
+        repo.git("fetch", "-q", "origin")
+        repo.git("branch", "-q", "--set-upstream-to=origin/main", "main")
 
         let colleague = TestRepo(cloneOf: origin)         // someone else pushes first
         colleague.write("shared.txt", "colleague's version\n")
@@ -141,9 +158,8 @@ struct CommitAndRebaseFailures {
             Issue.record("expected rebaseConflict, got \(outcome)")
             return
         }
-        // Today we abort the rebase: a known, documented divergence from
-        // gitwatch, which leaves it in progress (see CLAUDE.local.md).
-        #expect(!repo.midRebase, "current behaviour: rebase aborted, repo usable")
-        #expect(repo.commitCount == 2, "our commit still exists locally")
+        // gitwatch parity: no abort. The conflicted rebase is left in progress
+        // for the user to resolve; we only make it visible in the menu.
+        #expect(repo.midRebase, "the conflicted rebase is left in progress")
     }
 }

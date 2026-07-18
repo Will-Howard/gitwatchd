@@ -4,3 +4,6 @@ build/
 # macOS
 .DS_Store
 CLAUDE.local.md
+
+# Local end-to-end fiddling repos (devbox remote); never part of this repo
+test-repos/

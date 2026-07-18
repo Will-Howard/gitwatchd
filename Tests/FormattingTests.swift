@@ -38,6 +38,15 @@ struct MenuRowTitles {
                 == "notes · main · ⚠ commit failing")
     }
 
+    @Test("a config entry that can't be watched is flagged with a short reason, no path")
+    func configError() {
+        #expect(StatusFormat.configErrorRow(label: "demo-repo", reason: "repo not found")
+                == "⚠ demo-repo · repo not found")
+        let longLabel = String(repeating: "y", count: 100)
+        #expect(StatusFormat.configErrorRow(label: longLabel, reason: "not a git repo").count == 48,
+                "rows stay fixed width; the full path lives in the submenu")
+    }
+
     @Test("paused beats every other tail")
     func pausedWins() {
         #expect(StatusFormat.rowTitle(name: "notes", branch: "main", paused: true,

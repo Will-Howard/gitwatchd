@@ -12,6 +12,15 @@ import CoreServices
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var watchers: [RepoWatcher] = []
+    /// A config entry that can't be watched: short reason for the row, full
+    /// path or line for the submenu.
+    struct ConfigError {
+        let label: String    // repo name, or the raw line for parse errors
+        let reason: String   // short and fixed vocabulary, e.g. "repo not found"
+        let detail: String   // full path or config line, submenu only
+    }
+    private var configErrors: [ConfigError] = []
+    private var brokenRepoPaths: [String] = []
     private var configWatcher: FileWatcher?
     private var networkMonitor: NetworkMonitor?
 
@@ -47,22 +56,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         configWatcher?.start()
 
-        // Refresh relative times / pending counts while the menu is open.
+        // Refresh relative times / pending counts while the menu is open. Also
+        // re-check broken config entries: they can heal without the config
+        // changing (permission granted, volume mounted, repo re-created), and
+        // a one-shot verdict at reload would otherwise stay stale forever.
         Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
-            self?.rebuildMenu()
+            guard let self else { return }
+            if self.brokenRepoPaths.contains(where: { Git.isRepo($0) }) { self.reload() }
+            else { self.rebuildMenu() }
         }
     }
 
-    /// Re-read config and reconcile the running watchers.
+    /// Re-read config and reconcile the running watchers. Entries that can't
+    /// be watched (unparseable line, missing path, not a git repo) are kept as
+    /// config errors for the menu; a config line must never vanish silently.
     private func reload() {
         watchers.forEach { $0.stop() }
-        watchers = Config.specs()
-            .filter { Git.isRepo($0.path) }
-            .map { spec in
-                RepoWatcher(spec: spec) { [weak self] _, _ in
-                    DispatchQueue.main.async { self?.rebuildMenu() }
-                }
+        var errors = Config.lineErrors().map {
+            ConfigError(label: $0.line, reason: $0.error, detail: $0.line)
+        }
+        var broken: [String] = []
+        let watchable = Config.specs().filter { spec in
+            let reason: String
+            if !FileManager.default.fileExists(atPath: spec.path) {
+                reason = "repo not found"
+            } else if !Git.isRepo(spec.path) {
+                reason = "not a git repo"
+            } else {
+                return true
             }
+            errors.append(ConfigError(label: spec.name, reason: reason, detail: spec.path))
+            broken.append(spec.path)
+            return false
+        }
+        configErrors = errors
+        brokenRepoPaths = broken
+        watchers = watchable.map { spec in
+            RepoWatcher(spec: spec) { [weak self] _, _ in
+                DispatchQueue.main.async { self?.rebuildMenu() }
+            }
+        }
         watchers.forEach { $0.start() }
         rebuildMenu()
     }
@@ -81,7 +114,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             menu.addItem(.separator())
         }
 
-        if watchers.isEmpty {
+        if watchers.isEmpty && configErrors.isEmpty {
             add(menu, "No repos watched yet", enabled: false)
         } else {
             add(menu, "Watching \(watchers.count) repo\(watchers.count == 1 ? "" : "s")", enabled: false)
@@ -98,6 +131,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 row.submenu = repoSubmenu(for: w)
                 menu.addItem(row)
                 add(menu, "     \(Git.lastCommitSummary(w.path))", enabled: false)
+            }
+            for e in configErrors {
+                let row = NSMenuItem(title: StatusFormat.configErrorRow(label: e.label, reason: e.reason),
+                                     action: nil, keyEquivalent: "")
+                let sub = NSMenu()
+                add(sub, summarize(e.detail), enabled: false)
+                add(sub, "⚠ " + e.reason, enabled: false)
+                row.submenu = sub
+                menu.addItem(row)
             }
         }
 
@@ -121,7 +163,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         add(sub, summarize(w.path), enabled: false)   // head-truncated so rows stay narrow
         if let err = w.lastError {
             sub.addItem(.separator())
-            add(sub, StatusFormat.errorHeadline(label: err.outcome.failureLabel ?? "failing",
+            add(sub, StatusFormat.errorHeadline(label: err.outcome.errorLabel ?? "failing",
                                                 attempts: err.attempts), enabled: false)
             if let detail = err.outcome.detail, !detail.isEmpty {
                 add(sub, "   " + StatusFormat.truncated(detail), enabled: false)
@@ -176,7 +218,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Swap the menu-bar glyph to the attention variant while any repo is in an
     /// error state, back to the plain sync arrows when all are healthy.
     private func updateIcon() {
-        let failing = watchers.contains { $0.lastError != nil }
+        let failing = watchers.contains { $0.lastError != nil } || !configErrors.isEmpty
         let symbol = failing ? "exclamationmark.arrow.triangle.2.circlepath"
                              : "arrow.triangle.2.circlepath"
         if let button = statusItem.button {

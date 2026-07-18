@@ -34,10 +34,18 @@ enum Config {
             .filter { !$0.isEmpty && !$0.hasPrefix("#") }
     }
 
-    /// Parsed specs (invalid lines are skipped).
+    /// Parsed specs (invalid lines are skipped; surface them via lineErrors).
     static func specs() -> [RepoSpec] {
         rawLines().compactMap { line in
             RepoSpecParser.parse(tokenize(line), raw: line).spec
+        }
+    }
+
+    /// Config lines that don't parse into a spec at all, with the reason.
+    static func lineErrors() -> [(line: String, error: String)] {
+        rawLines().compactMap { line in
+            let (spec, err) = RepoSpecParser.parse(tokenize(line), raw: line)
+            return spec == nil ? (line, err ?? "unparseable line") : nil
         }
     }
 

@@ -17,7 +17,7 @@ enum CommitOutcome: Equatable {
     case pushFailed(detail: String)
 
     /// Menu-row label when this outcome is an error state, nil when healthy.
-    var failureLabel: String? {
+    var errorLabel: String? {
         switch self {
         case .pushFailed:     return "push failing"
         case .rebaseConflict: return "rebase conflict"
@@ -25,8 +25,6 @@ enum CommitOutcome: Equatable {
         default:              return nil
         }
     }
-
-    var isFailure: Bool { failureLabel != nil }
 
     /// The captured git error line; nil for non-error outcomes.
     var detail: String? {
@@ -78,12 +76,24 @@ enum Git {
         return r.code == 0 ? r.out : "no commits yet"
     }
 
-    private static func hasMergeInProgress(_ dir: String) -> Bool {
+    /// True if a state file/dir exists inside the repo's resolved .git dir.
+    private static func gitStateExists(_ names: [String], in dir: String) -> Bool {
         let top = run(["rev-parse", "--git-dir"], in: dir)
         guard top.code == 0 else { return false }
         let gitDirPath = (top.out as NSString).isAbsolutePath
             ? top.out : (dir as NSString).appendingPathComponent(top.out)
-        return FileManager.default.fileExists(atPath: (gitDirPath as NSString).appendingPathComponent("MERGE_HEAD"))
+        return names.contains {
+            FileManager.default.fileExists(atPath: (gitDirPath as NSString).appendingPathComponent($0))
+        }
+    }
+
+    /// gitwatch's is_merging: MERGE_HEAD only (a rebase does not count, upstream).
+    private static func hasMergeInProgress(_ dir: String) -> Bool {
+        gitStateExists(["MERGE_HEAD"], in: dir)
+    }
+
+    private static func hasRebaseInProgress(_ dir: String) -> Bool {
+        gitStateExists(["rebase-merge", "rebase-apply"], in: dir)
     }
 
     /// Stage all, commit (honoring -m/-d/-M), then optionally pull --rebase (-R)
@@ -103,27 +113,44 @@ enum Git {
         return push(spec)
     }
 
-    /// The push stage of a cycle: pull --rebase first when -R, then push, exactly
-    /// as it runs at the end of autoCommit. Split out so a failed push can be
-    /// retried later without re-running the commit stage (the commit already
-    /// exists; gitwatch itself never retries because it only pushes right after
-    /// a commit).
+    /// The push stage of a cycle, exactly as gitwatch runs it. With -R, first
+    /// `git pull --rebase <remote>` (no branch argument, exit code ignored, no
+    /// abort: a conflict leaves the rebase in progress for the user to resolve,
+    /// and -M is the only guard). Then the push, which upstream runs regardless
+    /// of how the pull went. Split out from autoCommit so a failed push can be
+    /// retried without re-running the commit stage.
+    ///
+    /// Everything below the git calls is reporting only: gitwatch ignores both
+    /// results; we classify them for the menu.
     @discardableResult
     static func push(_ spec: RepoSpec) -> CommitOutcome {
         guard let remote = spec.remote else { return .committed }
         let dir = spec.path
-        let branch = spec.branch ?? currentBranch(dir)
+        var pullFailure: String? = nil
         if spec.rebase {
-            let pull = run(["pull", "--rebase", remote, branch], in: dir, gitDir: spec.gitDir)
-            if pull.code != 0 {
-                // Known divergence from upstream (gitwatch leaves the rebase in
-                // progress and relies on -M); tracked in CLAUDE.local.md.
-                run(["rebase", "--abort"], in: dir, gitDir: spec.gitDir)
-                return .rebaseConflict(detail: errorSummary(pull.out))
-            }
+            let pull = run(["pull", "--rebase", remote], in: dir, gitDir: spec.gitDir)
+            if pull.code != 0 { pullFailure = errorSummary(pull.out) }
         }
-        let p = run(["push", remote, branch], in: dir, gitDir: spec.gitDir)
+        let p = run(pushArgs(remote: remote, spec: spec), in: dir, gitDir: spec.gitDir)
+
+        if let pullFailure {
+            // A conflict leaves a rebase in progress and needs the user;
+            // anything else (offline, auth) is transient and worth retrying.
+            return hasRebaseInProgress(dir) ? .rebaseConflict(detail: pullFailure)
+                                            : .pushFailed(detail: pullFailure)
+        }
         return p.code == 0 ? .pushed : .pushFailed(detail: errorSummary(p.out))
+    }
+
+    /// gitwatch's push command: without -b, a bare `push <remote>` (git's
+    /// push.default decides); with -b, push `<current>:<branch>`, or just
+    /// `<branch>` from a detached HEAD.
+    private static func pushArgs(remote: String, spec: RepoSpec) -> [String] {
+        guard let branch = spec.branch else { return ["push", remote] }
+        let head = run(["symbolic-ref", "HEAD"], in: spec.path, gitDir: spec.gitDir)
+        guard head.code == 0 else { return ["push", remote, branch] }
+        let current = head.out.replacingOccurrences(of: "refs/heads/", with: "")
+        return ["push", remote, "\(current):\(branch)"]
     }
 
     /// The most informative line of a failed command's output: the first

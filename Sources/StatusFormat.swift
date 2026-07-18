@@ -11,9 +11,17 @@ enum StatusFormat {
                          pending: Int, error: CommitOutcome?) -> String {
         let base = "\(name) · \(branch)"
         if paused { return base + " · ⏸ paused" }
-        if let label = error?.failureLabel { return base + " · ⚠ " + label }
+        if let label = error?.errorLabel { return base + " · ⚠ " + label }
         if pending > 0 { return base + " · ✎ \(pending) pending" }
         return base
+    }
+
+    /// Menu row for a config entry that can't be watched at all (unparseable
+    /// line, missing path, not a git repo). These must never disappear
+    /// silently. Short fixed-width row (reasons are a fixed vocabulary, no
+    /// paths); the full path lives in the row's submenu.
+    static func configErrorRow(label: String, reason: String) -> String {
+        truncated("⚠ \(label) · \(reason)", max: 48)
     }
 
     /// Submenu headline for a failing repo.
