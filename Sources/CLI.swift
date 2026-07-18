@@ -240,27 +240,58 @@ enum CLI {
 
     private static func warn(_ msg: String) { FileHandle.standardError.write(("✗ " + msg + "\n").data(using: .utf8)!) }
 
+    // Help format: examples first, one flag per line with <metavar>
+    // placeholders and defaults stated (per clig.dev and upstream gitwatch's
+    // own help). Brackets mean optional; <angle brackets> are placeholders.
     private static func printUsage() {
         print("""
-        gitwatchd: always-on gitwatch daemon
+        gitwatchd - watch git repos and auto-commit changes, from the menu bar
 
         USAGE
-          gitwatchd [gitwatch flags] <path>   watch a repo (gitwatch-compatible)
-          gitwatchd add [flags] <path>        same, explicit
-          gitwatchd ls                        list watched repos + status
-          gitwatchd rm <name|path>            stop watching a repo
-          gitwatchd status                    daemon + config summary
-          gitwatchd start | stop              start/stop the menu-bar daemon
-          gitwatchd autostart [on|off|status] launch at login
-          gitwatchd config [path|edit]        show / open the config file
+          gitwatchd [flags] <path>     watch a repo (same flags as gitwatch)
+          gitwatchd <command> [args]
 
-        GITWATCH FLAGS (on add)
-          -s secs   debounce      -r remote  push after commit    -R  pull --rebase first
-          -b branch push branch   -m msg     commit msg (%d=date)  -d fmt  date format
-          -x glob   exclude        -M         no commit mid-merge  -g dir  --git-dir
+        EXAMPLES
+          gitwatchd .                       watch the current repo, commit locally
+          gitwatchd -r origin .             also push every commit to origin
+          gitwatchd -r origin -b main -R .  pull --rebase before each push
+          gitwatchd ls                      see everything being watched
+          gitwatchd rm blog                 stop watching, by name or path
 
-        EXAMPLE
-          gitwatchd -r origin -b main -s 5 ~/code/blog
+        COMMANDS
+          add [flags] <path>    watch a repo (bare `gitwatchd [flags] <path>` works too)
+          ls                    list watched repos with status
+          rm <name|path>        stop watching a repo
+          status                daemon and config summary
+          start, stop           start or stop the menu-bar daemon
+          autostart [on|off|status]
+                                launch the daemon at login (on by default on install)
+          config [path|edit]    print the config file path, or open it in your
+                                editor (the one `git commit` uses)
+          help                  show this help
+
+        FLAGS (gitwatch-compatible, for add)
+          -s <secs>     Wait <secs> after the last change before committing, so a
+                        batch of writes lands as one commit. Default: 2.
+          -r <remote>   Push to <remote> after every commit. Default: no push.
+          -b <branch>   Branch to push to. Without it, a plain `git push <remote>`
+                        decides. Only meaningful together with -r.
+          -R            Run `git pull --rebase <remote>` before each push.
+          -m <msg>      Commit message; %d becomes the timestamp.
+                        Default: "gitwatchd auto-commit (%d)".
+          -d <fmt>      strftime format for that timestamp (see `man date`).
+                        Default: "%Y-%m-%d %H:%M:%S".
+          -x <pattern>  Exclude files matching this glob. Repeatable.
+          -M            Skip committing while the repo has a merge in progress.
+          -g <path>     Location of the .git directory, if elsewhere (--git-dir).
+
+        GITWATCHD EXTRAS
+          --paused      Keep the repo in the config but don't watch it.
+                        The menu's Pause Watching toggles this.
+
+        The daemon lives in the menu bar and watches every repo listed in
+        ~/.config/gitwatchd/repos.txt (one gitwatch-style line per repo).
+        Edits to that file are picked up live, however they are made.
         """)
     }
 }
