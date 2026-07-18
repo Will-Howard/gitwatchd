@@ -12,13 +12,6 @@ import CoreServices
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var watchers: [RepoWatcher] = []
-    /// A config entry that can't be watched: short reason for the row, full
-    /// path or line for the submenu.
-    struct ConfigError {
-        let label: String    // repo name, or the raw line for parse errors
-        let reason: String   // short and fixed vocabulary, e.g. "repo not found"
-        let detail: String   // full path or config line, submenu only
-    }
     private var configErrors: [ConfigError] = []
     private var brokenRepoPaths: [String] = []
     private var configWatcher: FileWatcher?
@@ -73,25 +66,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func reload() {
         let previouslyPaused = Set(watchers.filter { $0.paused }.map { $0.path })
         watchers.forEach { $0.stop() }
-        var errors = Config.lineErrors().map {
-            ConfigError(label: $0.line, reason: $0.error, detail: $0.line)
-        }
-        var broken: [String] = []
-        let watchable = Config.specs().filter { spec in
-            let reason: String
-            if !FileManager.default.fileExists(atPath: spec.path) {
-                reason = "repo not found"
-            } else if !Git.isRepo(spec.path, gitDir: spec.gitDir) {
-                reason = "not a git repo"
-            } else {
-                return true
-            }
-            errors.append(ConfigError(label: spec.name, reason: reason, detail: spec.path))
-            broken.append(spec.path)
-            return false
-        }
+        let (watchable, errors) = Config.load()
         configErrors = errors
-        brokenRepoPaths = broken
+        brokenRepoPaths = errors.compactMap { $0.repoPath }
         watchers = watchable.map { spec in
             RepoWatcher(spec: spec) { [weak self] _, _ in
                 DispatchQueue.main.async { self?.rebuildMenu() }

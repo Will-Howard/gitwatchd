@@ -1,5 +1,14 @@
 import Foundation
 
+/// A config entry that can't be watched. A config line must never vanish
+/// silently; the menu and `gitwatchd ls` both render these.
+struct ConfigError {
+    let label: String       // repo name, or the offending line for parse errors
+    let reason: String      // short fixed vocabulary, e.g. "repo not found"
+    let detail: String      // full path or config line, for submenu/ls
+    let repoPath: String?   // set when there is a path to re-check for healing
+}
+
 // Config = a list of gitwatch-style argument lines, one repo per line.
 // Hand-editable and CLI-writable; the CLI appends exactly what the user typed.
 enum Config {
@@ -50,6 +59,28 @@ enum Config {
             let (spec, err) = RepoSpecParser.parse(tokenize(line))
             return spec == nil ? (line, err ?? "unparseable line") : nil
         }
+    }
+
+    /// One pass over the config: the watchable specs, plus every entry that
+    /// can't be watched (unparseable line, missing path, not a git repo).
+    static func load() -> (specs: [RepoSpec], errors: [ConfigError]) {
+        var errors = lineErrors().map {
+            ConfigError(label: $0.line, reason: $0.error, detail: $0.line, repoPath: nil)
+        }
+        let watchable = specs().filter { spec in
+            let reason: String
+            if !FileManager.default.fileExists(atPath: spec.path) {
+                reason = "repo not found"
+            } else if !Git.isRepo(spec.path, gitDir: spec.gitDir) {
+                reason = "not a git repo"
+            } else {
+                return true
+            }
+            errors.append(ConfigError(label: spec.name, reason: reason,
+                                      detail: spec.path, repoPath: spec.path))
+            return false
+        }
+        return (watchable, errors)
     }
 
     /// Append a repo line (raw gitwatch args). Creates the file if needed.

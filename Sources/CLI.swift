@@ -53,15 +53,18 @@ enum CLI {
     // MARK: - ls
 
     private static func list() -> Int32 {
-        let specs = Config.specs()
-        if specs.isEmpty { print("No repos watched."); return 0 }
+        let (specs, errors) = Config.load()
+        if specs.isEmpty && errors.isEmpty { print("No repos watched."); return 0 }
         for s in specs {
-            let ok = Git.isRepo(s.path, gitDir: s.gitDir)
-            let branch = ok ? Git.currentBranch(s.path, gitDir: s.gitDir) : "?"
-            let pending = ok ? Git.pendingCount(s.path, gitDir: s.gitDir) : 0
-            let state = StatusFormat.cliState(ok: ok, paused: s.paused, pending: pending)
+            let branch = Git.currentBranch(s.path, gitDir: s.gitDir)
+            let pending = Git.pendingCount(s.path, gitDir: s.gitDir)
+            let state = StatusFormat.cliState(paused: s.paused, pending: pending)
             let dest = s.remote.map { " → \($0)/\(s.branch ?? branch)" } ?? ""
             print("  \(state.padding(toLength: 14, withPad: " ", startingAt: 0)) \(s.name)  (\(s.path))  \(branch)\(dest)")
+        }
+        for e in errors {   // same information the menu shows
+            let place = e.label == e.detail ? e.label : "\(e.label)  (\(e.detail))"
+            print("  ⚠ \(e.reason): \(place)")
         }
         return 0
     }

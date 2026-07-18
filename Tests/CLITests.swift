@@ -131,6 +131,22 @@ struct CLIContract {
             #expect(CLI.run(["pause", "nothing-here"]) == 1)
         }
     }
+
+    @Test("broken config entries surface in load() and ls, like the menu")
+    func configErrorsSurface() {
+        withTemporaryConfig {
+            let repo = TestRepo()
+            _ = CLI.run([repo.path])
+            Config.append(TestDirs.root + "/vanished-repo")
+            Config.append("-z bogus /tmp/x")
+            let (specs, errors) = Config.load()
+            #expect(specs.count == 1, "the healthy repo is unaffected")
+            #expect(errors.count == 2)
+            #expect(errors.contains { $0.reason == "repo not found" })
+            #expect(errors.contains { $0.reason.contains("unknown flag") })
+            #expect(CLI.run(["ls"]) == 0, "ls renders them rather than crashing or hiding them")
+        }
+    }
 }
 
 // The help is the contract; these hold it to the implementation. The

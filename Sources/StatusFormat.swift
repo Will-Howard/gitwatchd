@@ -25,8 +25,8 @@ enum StatusFormat {
     }
 
     /// The CLI `ls` state column; same vocabulary as the menu-row tails.
-    static func cliState(ok: Bool, paused: Bool, pending: Int) -> String {
-        if !ok { return "⚠ missing" }
+    /// (Unwatchable entries render as error rows, not a state.)
+    static func cliState(paused: Bool, pending: Int) -> String {
         if paused { return "⏸ paused" }
         if pending > 0 { return "✎ \(pending) pending" }
         return "✓ idle"
