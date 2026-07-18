@@ -40,14 +40,14 @@ enum Config {
     /// Parsed specs (invalid lines are skipped; surface them via lineErrors).
     static func specs() -> [RepoSpec] {
         rawLines().compactMap { line in
-            RepoSpecParser.parse(tokenize(line), raw: line).spec
+            RepoSpecParser.parse(tokenize(line)).spec
         }
     }
 
     /// Config lines that don't parse into a spec at all, with the reason.
     static func lineErrors() -> [(line: String, error: String)] {
         rawLines().compactMap { line in
-            let (spec, err) = RepoSpecParser.parse(tokenize(line), raw: line)
+            let (spec, err) = RepoSpecParser.parse(tokenize(line))
             return spec == nil ? (line, err ?? "unparseable line") : nil
         }
     }
@@ -71,7 +71,7 @@ enum Config {
         let kept = text.split(separator: "\n", omittingEmptySubsequences: false).filter { rawSub in
             let line = String(rawSub).trimmingCharacters(in: .whitespaces)
             if line.isEmpty || line.hasPrefix("#") { return true }
-            guard let spec = RepoSpecParser.parse(tokenize(line), raw: line).spec else { return true }
+            guard let spec = RepoSpecParser.parse(tokenize(line)).spec else { return true }
             let match = spec.path == want || spec.name == needle || spec.path == needle
             if match { removed += 1 }
             return !match
@@ -93,7 +93,7 @@ enum Config {
             let line = String(sub)
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             guard !trimmed.isEmpty, !trimmed.hasPrefix("#"),
-                  let spec = RepoSpecParser.parse(tokenize(trimmed), raw: trimmed).spec,
+                  let spec = RepoSpecParser.parse(tokenize(trimmed)).spec,
                   spec.path == want || spec.name == needle || spec.path == needle,
                   let rewritten = togglingPaused(line: trimmed, path: spec.path, paused: paused)
             else { return line }
@@ -111,7 +111,7 @@ enum Config {
     /// or removed; else nil for "leave this line alone".
     static func togglingPaused(line: String, path: String, paused: Bool) -> String? {
         let tokens = tokenize(line)
-        guard let spec = RepoSpecParser.parse(tokens, raw: line).spec,
+        guard let spec = RepoSpecParser.parse(tokens).spec,
               spec.path == path, spec.paused != paused else { return nil }
         var kept = tokens.filter { $0 != "--paused" }
         if paused { kept.insert("--paused", at: 0) }

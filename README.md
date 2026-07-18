@@ -1,83 +1,71 @@
 # gitwatchd
 
-An always-on macOS menu-bar daemon that watches Git repos and auto-commits (and
-optionally pushes) changes on a debounce — gitwatch's behaviour, made permanent.
-No Dock icon; a small CLI drives it. Standalone: native FSEvents + `git`, no
-`gitwatch`/`fswatch` dependency.
+Auto-commit and sync your git repos, from the macOS menu bar.
 
-> Status: local dev / self-demo, with a working local install. Homebrew-cask
-> packaging is parked. See `DESIGN.md` for rationale and decisions.
+[gitwatch](https://github.com/gitwatch/gitwatch) is a great idea: watch a repo,
+auto-commit every change, optionally push it. The flaw is that you have to leave
+it running in a terminal somewhere, which kills the utility of just trusting
+that it's always on. gitwatchd is the same idea as a proper Mac citizen: a
+menu-bar daemon that starts at login, watches your repos in the background, and
+shows you what it's doing (and what's failing). If you're comfortable with git,
+it covers a lot of what people use Dropbox for.
 
-## Requirements
-- macOS 13+ (Ventura), Apple Silicon or Intel
-- The Xcode **command-line tools** for `swiftc` (`xcode-select --install`) — you
-  never open Xcode.app itself.
+## Install
 
-## Build / run — three tiers
+Requires macOS 13+ and the Xcode command-line tools (`xcode-select --install`).
+You never open Xcode.
+
 ```sh
-# Tier 1 — dev loop (runs from build/, never touches /Applications or login items)
-make run       # build build/gitwatchd.app and (re)launch it
-make stop      # kill the running instance
-make clean     # remove build artifacts
-
-# Tier 2 — local install (no sudo)
-make install   # → /Applications (or ~/Applications) + CLI on PATH, launches it
-make uninstall # remove app, CLI link, login item, and first-run state
-
-# Tier 3 — distribution (needs a paid Apple Developer account)
-make sign-release DEV_ID="Developer ID Application: NAME (TEAMID)"
-make notarize     NOTARY_PROFILE=<notarytool keychain profile>
-```
-Edit a file under `Sources/`, run `make run`, and the freshly built app relaunches.
-There's no `.xcodeproj`: `make` compiles `Sources/*.swift` with `swiftc` and
-hand-assembles the `.app` bundle (`Resources/Info.plist` sets `LSUIElement` so it's
-menu-bar-only). For a from-scratch build: `make clean && make run`.
-
-**Dev vs install:** `make run` deliberately runs from `build/` and never registers a
-login item, so menu-item changes are one `make run` away and never masked by a stale
-install. `make install` is the real thing: it copies to `/Applications`, and on the
-**first launch of an installed copy** the daemon registers itself for launch-at-login
-(always-on is the point). That's one-time, gated by a sentinel in
-`~/Library/Application Support/gitwatchd/`, so if you later turn it off it stays off.
-`make uninstall` clears that sentinel too, so you can cleanly re-test onboarding.
-
-## Manually testing it
-```sh
-BIN=build/gitwatchd.app/Contents/MacOS/gitwatchd
-
-# 1. watch a repo (gitwatch-compatible flags; see below)
-$BIN /path/to/a/git/repo          # or: $BIN -s 5 -r origin -b main /path/...
-# 2. edit a file in that repo, wait ~2s, and it auto-commits
-# 3. click the menu-bar icon: repos, per-repo Pause / Copy Path / Open in Finder
-$BIN ls                           # list watched repos + status
-$BIN rm <name|path>               # stop watching
-```
-The menu-bar app and the CLI are the **same binary**: launched as the `.app` (or
-`gitwatchd serve`) it's the daemon; run with args it's the CLI. Config lives at
-`~/.config/gitwatchd/repos.txt` — one gitwatch-style argument line per repo,
-hand-editable; the daemon live-reloads on change.
-
-## The environment gotcha (why it "works in terminal but not from the app")
-A login-launched daemon inherits only a minimal environment (no Homebrew `PATH`, no
-`~/.zshrc` exports), so it can pick a different `git` and miss your SSH/credential
-setup. The daemon avoids this by re-deriving your real login-shell environment at
-startup (the same trick VS Code uses), so it uses the same `git` and SSH agent your
-terminal does. Inject custom auth via an optional `~/.config/gitwatchd/env.sh`.
-
-If that env capture ever breaks, the daemon says so — a `⚠ shell environment failed
-to load` item appears in the menu (and it's logged). To see what the daemon resolves:
-```sh
-$BIN doctor    # internal diagnostic: git binary, PATH, SSH agent keys, env.sh
+git clone https://github.com/Will-Howard/gitwatchd.git
+cd gitwatchd
+make install
 ```
 
-## Source layout
-| File | Responsibility |
-|---|---|
-| `main.swift` | Entry point (CLI vs daemon dispatch) + menu-bar `AppDelegate` |
-| `CLI.swift` | `gitwatchd` subcommands |
-| `Config.swift` | `repos.txt` read/write, gitwatch-line tokenizer |
-| `RepoSpec.swift` | gitwatch flag parsing → `RepoSpec` |
-| `RepoWatcher.swift` | FSEvents watch + debounce + `.git`/exclude filtering |
-| `Git.swift` | `git` invocation: add/commit/push/rebase |
-| `GitRuntime.swift` | login-shell env capture + git discovery |
-| `LaunchAtLogin.swift` | `SMAppService` launch-at-login toggle |
+That builds the app, puts it in /Applications, puts the `gitwatchd` CLI on your
+PATH, and launches it. It registers itself to start at login, because always-on
+is the point; turn that off in the menu if you don't want it. `make uninstall`
+removes everything.
+
+macOS will ask once for permission to access the folders your repos live in.
+
+## Use
+
+```sh
+cd ~/code/my-notes
+gitwatchd -r origin -b main .
+```
+
+Edit a file, wait a couple of seconds, and it's committed and pushed. The
+menu-bar icon shows every watched repo, what's pending, and what's failing; the
+icon changes when something needs your attention. `gitwatchd help` covers the
+rest: pause/resume, excludes, and `-R` for pull-rebase-before-push when more
+than one machine syncs to the same branch.
+
+Repos live in `~/.config/gitwatchd/repos.txt`, one line per repo, same flags as
+the CLI. Edit it by hand if you like (`gitwatchd config edit` opens it in your
+git editor); the daemon picks up changes live.
+
+## What it does to your repo, honestly
+
+- It commits everything that isn't gitignored, on a debounce. If your
+  `.gitignore` is sloppy, that includes secrets and half-finished work. Use it
+  on repos where "commit everything, often" is what you actually want.
+- It never force-pushes and never resolves conflicts. If a rebase hits a
+  conflict it stops, flags it in the menu, and leaves the repo for you to fix.
+- If a push fails (offline, server down), the commit stays local and gitwatchd
+  retries with backoff, and immediately when the network comes back.
+
+## If pushes work in your terminal but not from the app
+
+A login-launched app doesn't get your shell environment, which normally breaks
+SSH keys and credential helpers. gitwatchd re-derives your login shell's
+environment at startup (the same trick VS Code uses), so the daemon pushes with
+the same git and SSH agent your terminal uses. If something is still off,
+`gitwatchd doctor` shows exactly what the daemon sees.
+
+## Credit and license
+
+gitwatchd is a from-scratch Swift reimplementation of
+[gitwatch](https://github.com/gitwatch/gitwatch) by Patrick Lehner and
+contributors. The git behaviour is intended to match gitwatch exactly, and is
+tested differentially against it. GPL-3.0, like the original.

@@ -15,13 +15,11 @@ struct RepoSpec {
     var branch: String? = nil         // -b
     var rebase: Bool = false          // -R  pull --rebase before push
     var message: String = "gitwatchd auto-commit (%d)"  // -m  (%d -> date)
-    var logLines: Int? = nil          // -l / -L  (parsed; not yet enforced)
     var exclude: [String] = []        // -x  (repeatable)
     var noMergeCommit: Bool = false   // -M
     var gitDir: String? = nil         // -g  --git-dir
     var paused: Bool = false          // --paused (gitwatchd extension, not gitwatch:
                                       // config-level so a pause survives restarts)
-    var raw: String = ""              // original line, preserved verbatim
 
     var name: String { (path as NSString).lastPathComponent }
 
@@ -41,9 +39,8 @@ struct RepoSpec {
 enum RepoSpecParser {
     /// Parse a gitwatch-style argument list into a RepoSpec.
     /// Returns nil + an error message if there's no valid target.
-    static func parse(_ args: [String], raw: String = "") -> (spec: RepoSpec?, error: String?) {
+    static func parse(_ args: [String]) -> (spec: RepoSpec?, error: String?) {
         var spec = RepoSpec(path: "")
-        spec.raw = raw.isEmpty ? args.joined(separator: " ") : raw
         var target: String? = nil
         var i = 0
         func next() -> String? { i += 1; return i < args.count ? args[i] : nil }
@@ -57,8 +54,7 @@ enum RepoSpecParser {
             case "-b": if let v = next() { spec.branch = v }
             case "-R": spec.rebase = true
             case "-m": if let v = next() { spec.message = v }
-            case "-l": if let v = next(), let n = Int(v) { spec.logLines = n }
-            case "-L": if let v = next(), let n = Int(v) { spec.logLines = n }
+            case "-l", "-L": _ = next() // diff-in-message: accepted, not implemented (parity gap)
             case "-x": if let v = next() { spec.exclude.append(v) }
             case "-M": spec.noMergeCommit = true
             case "-g": if let v = next() { spec.gitDir = v }

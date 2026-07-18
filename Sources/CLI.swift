@@ -70,8 +70,7 @@ enum CLI {
 
     private static func remove(_ args: [String]) -> Int32 {
         guard let needle = args.first else { warn("usage: gitwatchd rm <name|path>"); return 1 }
-        let n = Config.remove(matching: (needle as NSString).expandingTildeInPath)
-            + (needle.contains("/") ? 0 : Config.remove(matching: needle))
+        let n = Config.remove(matching: needle)
         if n == 0 { warn("no watched repo matches \(needle)"); return 1 }
         ensureDaemonRunning()
         print("✓ stopped watching \(needle) (\(n) entr\(n == 1 ? "y" : "ies") removed)")
@@ -83,8 +82,7 @@ enum CLI {
     private static func setPaused(_ args: [String], _ paused: Bool) -> Int32 {
         let verb = paused ? "pause" : "resume"
         guard let needle = args.first else { warn("usage: gitwatchd \(verb) <name|path>"); return 1 }
-        let n = Config.setPaused(matching: (needle as NSString).expandingTildeInPath, paused: paused)
-            + (needle.contains("/") ? 0 : Config.setPaused(matching: needle, paused: paused))
+        let n = Config.setPaused(matching: needle, paused: paused)
         guard n > 0 else {
             // Distinguish "no such repo" from "already in that state".
             let want = (needle as NSString).expandingTildeInPath

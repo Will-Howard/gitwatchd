@@ -241,15 +241,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSPasteboard.general.setString(s, forType: .string)
     }
 
-    /// Head-truncate a long path to `max` chars, keeping the meaningful tail: `…/deep/repo`.
-    private func summarize(_ path: String, max: Int = 60) -> String {
-        guard path.count > max else { return path }
-        return "…" + path.suffix(max - 1)
+    /// Head-truncate a long path to 60 chars, keeping the meaningful tail: `…/deep/repo`.
+    private func summarize(_ path: String) -> String {
+        guard path.count > 60 else { return path }
+        return "…" + path.suffix(59)
     }
 
     private func add(_ menu: NSMenu, _ title: String, enabled: Bool = true,
-                     action: Selector? = nil, key: String = "") {
-        let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
+                     action: Selector? = nil) {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
         item.isEnabled = enabled
         if action != nil { item.target = self }
         menu.addItem(item)
