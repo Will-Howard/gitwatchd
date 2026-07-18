@@ -254,7 +254,9 @@ enum CLI {
         EXAMPLES
           gitwatchd .                       watch the current repo, commit locally
           gitwatchd -r origin .             also push every commit to origin
-          gitwatchd -r origin -b main -R .  pull --rebase before each push
+          gitwatchd -r origin -b main -R .  two-way sync: fetch commits made on
+                                            other machines and rebase yours on top
+                                            before each push to origin/main
           gitwatchd ls                      see everything being watched
           gitwatchd rm blog                 stop watching, by name or path
 
@@ -276,7 +278,9 @@ enum CLI {
           -r <remote>   Push to <remote> after every commit. Default: no push.
           -b <branch>   Branch to push to. Without it, a plain `git push <remote>`
                         decides. Only meaningful together with -r.
-          -R            Run `git pull --rebase <remote>` before each push.
+          -R            Before each push, pull commits made elsewhere and rebase
+                        yours on top (`git pull --rebase <remote>`). Use with -r
+                        when more than one machine pushes to the same branch.
           -m <msg>      Commit message; %d becomes the timestamp.
                         Default: "gitwatchd auto-commit (%d)".
           -d <fmt>      strftime format for that timestamp (see `man date`).
