@@ -138,18 +138,24 @@ enum CLI {
     /// Open the config in the editor `git commit` would use: `git var
     /// GIT_EDITOR` resolves $GIT_EDITOR, core.editor, $VISUAL, $EDITOR, then
     /// vi. Runs in this terminal (the menu's "Open Config File" stays GUI).
+    ///
+    /// This execs the editor in place of the CLI rather than spawning it:
+    /// Foundation's Process puts children in their own process group, which
+    /// costs a full-screen editor the terminal (it hangs on SIGTTIN reading
+    /// the tty, and ^C orphans it into a HUP). There is nothing to do after
+    /// the editor exits anyway; the daemon live-reloads off the file change.
     private static func editConfig() -> Int32 {
         Config.ensureExists()
         let r = Git.run(["var", "GIT_EDITOR"], in: FileManager.default.currentDirectoryPath)
         let editor = (r.code == 0 && !r.out.isEmpty) ? r.out : "vi"
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/bin/sh")
         // The editor value can be a command with flags (e.g. "code --wait"),
         // so hand it to the shell; the path rides in as $1, safely quoted.
-        p.arguments = ["-c", "\(editor) \"$1\"", "gitwatchd-edit", Config.path]
-        do { try p.run() } catch { warn("couldn't launch editor '\(editor)': \(error)"); return 1 }
-        p.waitUntilExit()
-        return p.terminationStatus
+        let argv = ["sh", "-c", "\(editor) \"$1\"", "gitwatchd-edit", Config.path]
+        var cArgv = argv.map { strdup($0) }
+        cArgv.append(nil)
+        execv("/bin/sh", cArgv)
+        warn("couldn't launch editor '\(editor)': \(String(cString: strerror(errno)))")
+        return 1   // reached only if execv itself failed
     }
 
     private static func autostart(_ args: [String]) -> Int32 {
