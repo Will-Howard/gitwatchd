@@ -44,7 +44,9 @@ enum Git {
         p.executableURL = URL(fileURLWithPath: GitRuntime.resolved.gitPath)
         p.environment = GitRuntime.resolved.env
         var full = args
-        if let gitDir { full = ["--git-dir", gitDir] + args }
+        // -g repos get upstream's exact override on every call:
+        // `git --work-tree $TARGETDIR --git-dir $GIT_DIR <cmd>`.
+        if let gitDir { full = ["--work-tree", dir, "--git-dir", gitDir] + args }
         p.arguments = full
         p.currentDirectoryURL = URL(fileURLWithPath: dir)
         let pipe = Pipe()
@@ -57,28 +59,28 @@ enum Git {
         return (p.terminationStatus, out.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
-    static func isRepo(_ dir: String) -> Bool {
-        run(["rev-parse", "--is-inside-work-tree"], in: dir).out == "true"
+    static func isRepo(_ dir: String, gitDir: String? = nil) -> Bool {
+        run(["rev-parse", "--is-inside-work-tree"], in: dir, gitDir: gitDir).out == "true"
     }
 
-    static func currentBranch(_ dir: String) -> String {
-        let r = run(["rev-parse", "--abbrev-ref", "HEAD"], in: dir)
+    static func currentBranch(_ dir: String, gitDir: String? = nil) -> String {
+        let r = run(["rev-parse", "--abbrev-ref", "HEAD"], in: dir, gitDir: gitDir)
         return r.code == 0 ? r.out : "?"
     }
 
-    static func pendingCount(_ dir: String) -> Int {
-        let out = run(["status", "--porcelain"], in: dir).out
+    static func pendingCount(_ dir: String, gitDir: String? = nil) -> Int {
+        let out = run(["status", "--porcelain"], in: dir, gitDir: gitDir).out
         return out.isEmpty ? 0 : out.split(separator: "\n").count
     }
 
-    static func lastCommitSummary(_ dir: String) -> String {
-        let r = run(["log", "-1", "--pretty=%cr · %s"], in: dir)
+    static func lastCommitSummary(_ dir: String, gitDir: String? = nil) -> String {
+        let r = run(["log", "-1", "--pretty=%cr · %s"], in: dir, gitDir: gitDir)
         return r.code == 0 ? r.out : "no commits yet"
     }
 
     /// True if a state file/dir exists inside the repo's resolved .git dir.
-    private static func gitStateExists(_ names: [String], in dir: String) -> Bool {
-        let top = run(["rev-parse", "--git-dir"], in: dir)
+    private static func gitStateExists(_ names: [String], in dir: String, gitDir: String?) -> Bool {
+        let top = run(["rev-parse", "--git-dir"], in: dir, gitDir: gitDir)
         guard top.code == 0 else { return false }
         let gitDirPath = (top.out as NSString).isAbsolutePath
             ? top.out : (dir as NSString).appendingPathComponent(top.out)
@@ -88,12 +90,12 @@ enum Git {
     }
 
     /// gitwatch's is_merging: MERGE_HEAD only (a rebase does not count, upstream).
-    private static func hasMergeInProgress(_ dir: String) -> Bool {
-        gitStateExists(["MERGE_HEAD"], in: dir)
+    private static func hasMergeInProgress(_ dir: String, gitDir: String?) -> Bool {
+        gitStateExists(["MERGE_HEAD"], in: dir, gitDir: gitDir)
     }
 
-    private static func hasRebaseInProgress(_ dir: String) -> Bool {
-        gitStateExists(["rebase-merge", "rebase-apply"], in: dir)
+    private static func hasRebaseInProgress(_ dir: String, gitDir: String?) -> Bool {
+        gitStateExists(["rebase-merge", "rebase-apply"], in: dir, gitDir: gitDir)
     }
 
     /// Stage all, commit (honoring -m/-d/-M), then optionally pull --rebase (-R)
@@ -101,8 +103,8 @@ enum Git {
     @discardableResult
     static func autoCommit(_ spec: RepoSpec) -> CommitOutcome {
         let dir = spec.path
-        if spec.noMergeCommit && hasMergeInProgress(dir) { return .skippedMerge }
-        guard pendingCount(dir) > 0 else { return .clean }
+        if spec.noMergeCommit && hasMergeInProgress(dir, gitDir: spec.gitDir) { return .skippedMerge }
+        guard pendingCount(dir, gitDir: spec.gitDir) > 0 else { return .clean }
 
         run(["add", "-A"], in: dir, gitDir: spec.gitDir)
         let msg = spec.message.replacingOccurrences(
@@ -136,8 +138,9 @@ enum Git {
         if let pullFailure {
             // A conflict leaves a rebase in progress and needs the user;
             // anything else (offline, auth) is transient and worth retrying.
-            return hasRebaseInProgress(dir) ? .rebaseConflict(detail: pullFailure)
-                                            : .pushFailed(detail: pullFailure)
+            return hasRebaseInProgress(dir, gitDir: spec.gitDir)
+                ? .rebaseConflict(detail: pullFailure)
+                : .pushFailed(detail: pullFailure)
         }
         return p.code == 0 ? .pushed : .pushFailed(detail: errorSummary(p.out))
     }

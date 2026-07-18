@@ -196,6 +196,27 @@ struct MergeGuard {
     }
 }
 
+@Suite("Detached git dir (-g), as the help promises")
+struct DetachedGitDir {
+
+    @Test("a worktree whose .git lives elsewhere still commits and validates")
+    func separateGitDir() {
+        let repo = TestRepo()
+        repo.write("a.txt", "base\n")
+        Git.autoCommit(repo.spec())
+        let gitDir = TestDirs.fresh("elsewhere.git")
+        try! FileManager.default.moveItem(atPath: repo.path + "/.git", toPath: gitDir)
+
+        let spec = repo.spec("-g", gitDir)
+        #expect(Git.isRepo(repo.path, gitDir: gitDir),
+                "the daemon/CLI validation path must accept a -g repo")
+        repo.write("a.txt", "changed\n")
+        #expect(Git.autoCommit(spec) == .committed)
+        #expect(Git.run(["rev-list", "--count", "HEAD"], in: repo.path, gitDir: gitDir).out == "2")
+        #expect(Git.autoCommit(spec) == .clean, "and the change was fully committed")
+    }
+}
+
 @Suite("Commit and rebase failures")
 struct CommitAndRebaseFailures {
 

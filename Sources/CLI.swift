@@ -35,7 +35,7 @@ enum CLI {
         guard FileManager.default.fileExists(atPath: spec.path) else {
             warn("path does not exist: \(spec.path)"); return 1
         }
-        guard Git.isRepo(spec.path) else {
+        guard Git.isRepo(spec.path, gitDir: spec.gitDir) else {
             warn("not a git repo: \(spec.path)\n  run: git init \(spec.path)"); return 1
         }
 
@@ -56,9 +56,9 @@ enum CLI {
         let specs = Config.specs()
         if specs.isEmpty { print("No repos watched."); return 0 }
         for s in specs {
-            let ok = Git.isRepo(s.path)
-            let branch = ok ? Git.currentBranch(s.path) : "?"
-            let pending = ok ? Git.pendingCount(s.path) : 0
+            let ok = Git.isRepo(s.path, gitDir: s.gitDir)
+            let branch = ok ? Git.currentBranch(s.path, gitDir: s.gitDir) : "?"
+            let pending = ok ? Git.pendingCount(s.path, gitDir: s.gitDir) : 0
             let state = !ok ? "⚠ missing" : s.paused ? "⏸ paused" : pending > 0 ? "✎ \(pending) pending" : "✓ idle"
             let dest = s.remote.map { " → \($0)/\(s.branch ?? branch)" } ?? ""
             print("  \(state.padding(toLength: 14, withPad: " ", startingAt: 0)) \(s.name)  (\(s.path))  \(branch)\(dest)")
