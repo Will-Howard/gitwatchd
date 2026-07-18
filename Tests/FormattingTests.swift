@@ -55,6 +55,18 @@ struct MenuRowTitles {
     }
 }
 
+@Suite("CLI ls state column")
+struct CLIStateColumn {
+
+    @Test("the same vocabulary as the menu: missing, paused, pending, idle")
+    func cliStates() {
+        #expect(StatusFormat.cliState(ok: false, paused: false, pending: 0) == "⚠ missing")
+        #expect(StatusFormat.cliState(ok: true, paused: true, pending: 3) == "⏸ paused")
+        #expect(StatusFormat.cliState(ok: true, paused: false, pending: 3) == "✎ 3 pending")
+        #expect(StatusFormat.cliState(ok: true, paused: false, pending: 0) == "✓ idle")
+    }
+}
+
 @Suite("Failing repo submenu")
 struct FailingRepoSubmenu {
 

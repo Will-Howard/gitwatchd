@@ -3,8 +3,11 @@ import Foundation
 // Config = a list of gitwatch-style argument lines, one repo per line.
 // Hand-editable and CLI-writable; the CLI appends exactly what the user typed.
 enum Config {
+    /// Tests point this at a scratch directory; nil means the real location.
+    static var overrideDir: String?
+
     static var dir: String {
-        (NSHomeDirectory() as NSString).appendingPathComponent(".config/gitwatchd")
+        overrideDir ?? (NSHomeDirectory() as NSString).appendingPathComponent(".config/gitwatchd")
     }
     static var path: String {
         // .txt (not .conf) so "Open Config File" launches a sensible default app.

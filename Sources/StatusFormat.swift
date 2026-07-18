@@ -24,6 +24,14 @@ enum StatusFormat {
         truncated("⚠ \(label) · \(reason)", max: 48)
     }
 
+    /// The CLI `ls` state column; same vocabulary as the menu-row tails.
+    static func cliState(ok: Bool, paused: Bool, pending: Int) -> String {
+        if !ok { return "⚠ missing" }
+        if paused { return "⏸ paused" }
+        if pending > 0 { return "✎ \(pending) pending" }
+        return "✓ idle"
+    }
+
     /// Submenu headline for a failing repo.
     static func errorHeadline(label: String, attempts: Int) -> String {
         attempts > 1 ? "⚠ \(label) (\(attempts) attempts)" : "⚠ \(label)"

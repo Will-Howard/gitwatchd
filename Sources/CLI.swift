@@ -59,7 +59,7 @@ enum CLI {
             let ok = Git.isRepo(s.path, gitDir: s.gitDir)
             let branch = ok ? Git.currentBranch(s.path, gitDir: s.gitDir) : "?"
             let pending = ok ? Git.pendingCount(s.path, gitDir: s.gitDir) : 0
-            let state = !ok ? "⚠ missing" : s.paused ? "⏸ paused" : pending > 0 ? "✎ \(pending) pending" : "✓ idle"
+            let state = StatusFormat.cliState(ok: ok, paused: s.paused, pending: pending)
             let dest = s.remote.map { " → \($0)/\(s.branch ?? branch)" } ?? ""
             print("  \(state.padding(toLength: 14, withPad: " ", startingAt: 0)) \(s.name)  (\(s.path))  \(branch)\(dest)")
         }
@@ -239,9 +239,12 @@ enum CLI {
         !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty
     }
 
+    /// Tests set this false so CLI calls don't launch the real menu-bar app.
+    static var spawnsDaemon = true
+
     /// Best-effort: launch the menu-bar daemon if it isn't running.
     private static func ensureDaemonRunning() {
-        guard !isDaemonRunning() else { return }
+        guard spawnsDaemon, !isDaemonRunning() else { return }
         guard let appURL = locateApp() else { return }
         let cfg = NSWorkspace.OpenConfiguration()
         cfg.activates = false
@@ -266,8 +269,10 @@ enum CLI {
     // Help format: examples first, one flag per line with <metavar>
     // placeholders and defaults stated (per clig.dev and upstream gitwatch's
     // own help). Brackets mean optional; <angle brackets> are placeholders.
-    private static func printUsage() {
-        print("""
+    // Exposed as a constant so tests can hold the help to the implementation.
+    private static func printUsage() { print(usageText) }
+
+    static let usageText = """
         gitwatchd - daemon that watches git repos and auto-commits changes
 
         USAGE
@@ -318,6 +323,5 @@ enum CLI {
 
         The daemon lives in the menu bar and watches every repo listed in
         ~/.config/gitwatchd/repos.txt (one gitwatch-style line per repo).
-        """)
-    }
+        """
 }
