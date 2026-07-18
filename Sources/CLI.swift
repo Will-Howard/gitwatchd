@@ -11,6 +11,8 @@ enum CLI {
         case "help", "-h", "--help": printUsage(); return 0
         case "ls", "list":           return list()
         case "rm", "remove":         return remove(Array(args.dropFirst()))
+        case "pause":                return setPaused(Array(args.dropFirst()), true)
+        case "resume":               return setPaused(Array(args.dropFirst()), false)
         case "status":               return status()
         case "doctor":               return doctor()   // internal/undocumented: env diagnostic
         case "start":                return startDaemon()
@@ -73,6 +75,27 @@ enum CLI {
         if n == 0 { warn("no watched repo matches \(needle)"); return 1 }
         ensureDaemonRunning()
         print("✓ stopped watching \(needle) (\(n) entr\(n == 1 ? "y" : "ies") removed)")
+        return 0
+    }
+
+    // MARK: - pause / resume
+
+    private static func setPaused(_ args: [String], _ paused: Bool) -> Int32 {
+        let verb = paused ? "pause" : "resume"
+        guard let needle = args.first else { warn("usage: gitwatchd \(verb) <name|path>"); return 1 }
+        let n = Config.setPaused(matching: (needle as NSString).expandingTildeInPath, paused: paused)
+            + (needle.contains("/") ? 0 : Config.setPaused(matching: needle, paused: paused))
+        guard n > 0 else {
+            // Distinguish "no such repo" from "already in that state".
+            let want = (needle as NSString).expandingTildeInPath
+            let known = Config.specs().contains { $0.path == want || $0.name == needle || $0.path == needle }
+            warn(known ? "\(needle) is already \(paused ? "paused" : "watching")"
+                       : "no watched repo matches \(needle)")
+            return 1
+        }
+        ensureDaemonRunning()
+        print(paused ? "⏸ paused \(needle)  (resume with: gitwatchd resume \(needle))"
+                     : "✓ resumed \(needle); catching up on anything that changed meanwhile")
         return 0
     }
 
@@ -245,7 +268,7 @@ enum CLI {
     // own help). Brackets mean optional; <angle brackets> are placeholders.
     private static func printUsage() {
         print("""
-        gitwatchd - watch git repos and auto-commit changes, from the menu bar
+        gitwatchd - daemon that watches git repos and auto-commits changes
 
         USAGE
           gitwatchd [flags] <path>     watch a repo
@@ -264,6 +287,8 @@ enum CLI {
           add [flags] <path>    watch a repo (bare `gitwatchd [flags] <path>` works too)
           ls                    list watched repos with status
           rm <name|path>        stop watching a repo
+          pause <name|path>     stop watching temporarily; the repo stays listed
+          resume <name|path>    start watching again and commit what piled up
           status                daemon and config summary
           start, stop           start or stop the menu-bar daemon
           autostart [on|off|status]
@@ -288,8 +313,8 @@ enum CLI {
           -x <pattern>  Exclude files matching this glob. Repeatable.
           -M            Skip committing while the repo has a merge in progress.
           -g <path>     Location of the .git directory, if elsewhere (--git-dir).
-          --paused      Keep the repo in the config but don't watch it.
-                        The menu's Pause Watching toggles this.
+          --paused      Keep the repo in the config but don't watch it. This is
+                        what `gitwatchd pause` and the menu's Pause Watching set.
 
         The daemon lives in the menu bar and watches every repo listed in
         ~/.config/gitwatchd/repos.txt (one gitwatch-style line per repo).

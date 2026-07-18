@@ -71,6 +71,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// be watched (unparseable line, missing path, not a git repo) are kept as
     /// config errors for the menu; a config line must never vanish silently.
     private func reload() {
+        let previouslyPaused = Set(watchers.filter { $0.paused }.map { $0.path })
         watchers.forEach { $0.stop() }
         var errors = Config.lineErrors().map {
             ConfigError(label: $0.line, reason: $0.error, detail: $0.line)
@@ -97,6 +98,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         watchers.forEach { $0.start() }
+        // A repo resumed by any route (menu, CLI, hand edit) should commit
+        // whatever piled up while it was paused, not wait for the next change.
+        for w in watchers where previouslyPaused.contains(w.path) && !w.paused {
+            w.flushNow()
+        }
         rebuildMenu()
     }
 
@@ -186,12 +192,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func togglePause(_ s: NSMenuItem) {
         guard let w = s.representedObject as? RepoWatcher else { return }
         // Pause is config-level state so it survives restarts: rewrite the
-        // repo's config line and rebuild from it.
-        Config.setPaused(w.path, !w.paused)
+        // repo's config line and rebuild from it (reload flushes on resume).
+        Config.setPaused(matching: w.path, paused: !w.paused)
         reload()
-        if let fresh = watchers.first(where: { $0.path == w.path }), !fresh.paused {
-            fresh.flushNow()   // commit whatever piled up while paused
-        }
     }
     @objc private func retryNow(_ s: NSMenuItem) {
         (s.representedObject as? RepoWatcher)?.retryNow()

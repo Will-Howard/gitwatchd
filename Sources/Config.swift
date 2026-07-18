@@ -77,23 +77,27 @@ enum Config {
         return removed
     }
 
-    /// Flip the --paused token on the config line watching `repoPath`. Pause
-    /// lives in the config, not app state, so it survives daemon and computer
-    /// restarts. Returns true if a line changed.
+    /// Flip the --paused token on config lines matching `needle` (by full
+    /// path or repo name, like remove). Pause lives in the config, not app
+    /// state, so it survives daemon and computer restarts. Returns the number
+    /// of lines changed.
     @discardableResult
-    static func setPaused(_ repoPath: String, _ paused: Bool) -> Bool {
-        guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return false }
-        var changed = false
+    static func setPaused(matching needle: String, paused: Bool) -> Int {
+        guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return 0 }
+        let want = (needle as NSString).expandingTildeInPath
+        var changed = 0
         let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map { sub -> String in
             let line = String(sub)
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             guard !trimmed.isEmpty, !trimmed.hasPrefix("#"),
-                  let rewritten = togglingPaused(line: trimmed, path: repoPath, paused: paused)
+                  let spec = RepoSpecParser.parse(tokenize(trimmed), raw: trimmed).spec,
+                  spec.path == want || spec.name == needle || spec.path == needle,
+                  let rewritten = togglingPaused(line: trimmed, path: spec.path, paused: paused)
             else { return line }
-            changed = true
+            changed += 1
             return rewritten
         }
-        if changed {
+        if changed > 0 {
             try? lines.joined(separator: "\n").write(toFile: path, atomically: true, encoding: .utf8)
         }
         return changed
