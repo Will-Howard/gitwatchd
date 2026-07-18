@@ -170,14 +170,39 @@ enum CLI {
 
     private static func startDaemon() -> Int32 {
         if isDaemonRunning() { print("daemon already running"); return 0 }
-        ensureDaemonRunning()
-        print(isDaemonRunning() ? "✓ daemon started" : "could not locate gitwatchd.app to launch")
+        guard let appURL = locateApp() else {
+            warn("gitwatchd.app not found in /Applications or ~/Applications (run `make install`, or set GITWATCHD_APP)")
+            return 1
+        }
+        // openApplication is asynchronous: wait for its verdict instead of
+        // racing it (checking isDaemonRunning immediately reported a launch
+        // still in progress as a failure, and swallowed real launch errors).
+        let cfg = NSWorkspace.OpenConfiguration()
+        cfg.activates = false
+        var failure: String?
+        let done = DispatchSemaphore(value: 0)
+        NSWorkspace.shared.openApplication(at: appURL, configuration: cfg) { _, error in
+            failure = error?.localizedDescription
+            done.signal()
+        }
+        _ = done.wait(timeout: .now() + 15)
+        if let failure { warn("could not launch \(appURL.path): \(failure)"); return 1 }
+        for _ in 0..<20 where !isDaemonRunning() { usleep(100_000) }  // registration can lag the callback
+        print(isDaemonRunning() ? "✓ daemon started" : "launch requested; the menu bar icon should appear shortly")
         return 0
     }
 
     private static func stopDaemon() -> Int32 {
+        guard isDaemonRunning() else { print("daemon not running"); return 0 }
         for app in NSRunningApplication.runningApplications(withBundleIdentifier: bundleID) {
             app.terminate()
+        }
+        // terminate() is asynchronous, like openApplication: wait for the exit
+        // so `gitwatchd stop && gitwatchd start` doesn't race the old process.
+        for _ in 0..<50 where isDaemonRunning() { usleep(100_000) }
+        if isDaemonRunning() {
+            warn("daemon did not exit; force with: pkill -x gitwatchd")
+            return 1
         }
         print("✓ daemon stopped")
         return 0

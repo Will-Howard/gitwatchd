@@ -36,8 +36,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let envError = GitRuntime.resolved.error {
             NSLog("gitwatchd: shell environment capture FAILED: %@", envError)
         }
-        if let msg = LaunchAtLogin.enableOnFirstInstalledRunIfNeeded() {
-            NSLog("gitwatchd: first run: %@", msg)
+        if let msg = LaunchAtLogin.reconcileOnInstalledRun() {
+            NSLog("gitwatchd: %@", msg)
         }
         reload()
 

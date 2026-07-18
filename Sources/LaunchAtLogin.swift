@@ -20,6 +20,7 @@ enum LaunchAtLogin {
             } else {
                 if service.status == .enabled { try service.unregister() }
             }
+            recordDesired(enabled)   // remember intent so reinstalls can restore it
             return nil
         } catch {
             return "\(error.localizedDescription)"
@@ -43,31 +44,47 @@ enum LaunchAtLogin {
     static var stateDir: String {
         (NSHomeDirectory() as NSString).appendingPathComponent("Library/Application Support/gitwatchd")
     }
-    static var firstRunSentinel: String {
+    /// Records the state the user wants ("on"/"off"). Its absence doubles as
+    /// the first-run marker. (Pre-record installs left an empty file; that
+    /// predates opt-out recording and means "on".)
+    static var desiredStateFile: String {
         (stateDir as NSString).appendingPathComponent("first-run-complete")
     }
 
-    /// On the first launch of an *installed* copy, enable launch-at-login once:
-    /// always-on is this app's whole point, so this meets the user's stated intent
-    /// rather than sneaking past it. Gated so it:
-    ///   • never fires for a dev build run from build/ (only /Applications or ~/Applications)
-    ///   • never re-fires once onboarded, so a later opt-out sticks forever (rule #3)
+    private static func recordDesired(_ on: Bool) {
+        try? FileManager.default.createDirectory(atPath: stateDir, withIntermediateDirectories: true)
+        try? (on ? "on" : "off").write(toFile: desiredStateFile, atomically: true, encoding: .utf8)
+    }
+
+    /// nil = never onboarded; true/false = the state the user last chose.
+    private static var recordedDesired: Bool? {
+        guard let s = try? String(contentsOfFile: desiredStateFile, encoding: .utf8) else { return nil }
+        return s.trimmingCharacters(in: .whitespacesAndNewlines) != "off"
+    }
+
+    /// On every launch of an *installed* copy, make reality match recorded
+    /// intent. First installed run: enable launch-at-login (always-on is this
+    /// app's whole point) and record it. Later runs: if the user wants it on
+    /// but the registration went stale (each ad-hoc re-sign gives the app a
+    /// new identity, invalidating the old registration), quietly re-register.
+    /// An opt-out is recorded as "off" and is never overridden. Dev builds
+    /// from build/ never touch login items or the record.
     /// Returns a message to surface, or nil if nothing was done.
     @discardableResult
-    static func enableOnFirstInstalledRunIfNeeded() -> String? {
+    static func reconcileOnInstalledRun() -> String? {
         let bundlePath = Bundle.main.bundlePath
         let installedRoots = ["/Applications",
                               (NSHomeDirectory() as NSString).appendingPathComponent("Applications")]
         guard installedRoots.contains(where: { bundlePath.hasPrefix($0 + "/") }) else {
-            return nil   // dev run from build/: never touch login items or the sentinel
+            return nil
         }
-        guard !FileManager.default.fileExists(atPath: firstRunSentinel) else {
-            return nil   // already onboarded: respect any later opt-out forever
-        }
+        let firstRun = recordedDesired == nil
+        guard recordedDesired ?? true else { return nil }   // opted out: never touch
+        if !firstRun && isEnabled { return nil }            // wanted on, still on
         let error = set(true)
-        try? FileManager.default.createDirectory(atPath: stateDir, withIntermediateDirectories: true)
-        FileManager.default.createFile(atPath: firstRunSentinel, contents: nil)
+        if error != nil { recordDesired(true) }   // set records on success; keep intent on failure
+        let what = firstRun ? "enabled launch-at-login" : "restored launch-at-login after reinstall"
         return error.map { "launch-at-login could not be enabled: \($0)" }
-            ?? "enabled launch-at-login (\(statusText))"
+            ?? "\(what) (\(statusText))"
     }
 }
