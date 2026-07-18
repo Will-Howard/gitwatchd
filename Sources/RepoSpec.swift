@@ -24,6 +24,18 @@ struct RepoSpec {
     var raw: String = ""              // original line, preserved verbatim
 
     var name: String { (path as NSString).lastPathComponent }
+
+    /// True if the -x patterns exclude this changed path. A pattern matches
+    /// the bare file name or the full path (fnmatch, like the inotifywait
+    /// exclude gitwatch feeds -x into). Patterns are repeatable; none means
+    /// nothing is excluded.
+    func excludes(_ fullPath: String) -> Bool {
+        guard !exclude.isEmpty else { return false }
+        let name = (fullPath as NSString).lastPathComponent
+        return exclude.contains { pattern in
+            fnmatch(pattern, name, 0) == 0 || fnmatch(pattern, fullPath, 0) == 0
+        }
+    }
 }
 
 enum RepoSpecParser {

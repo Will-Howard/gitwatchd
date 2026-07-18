@@ -56,7 +56,7 @@ final class RepoWatcher {
             for i in 0..<count {
                 let p = String(cString: cPaths[i])
                 if p.contains("/.git/") || p.hasSuffix("/.git") { continue }
-                if me.isExcluded(p) { continue }
+                if me.spec.excludes(p) { continue }
                 me.schedule()
                 break
             }
@@ -72,17 +72,6 @@ final class RepoWatcher {
         guard let stream else { return }
         FSEventStreamSetDispatchQueue(stream, queue)
         FSEventStreamStart(stream)
-    }
-
-    private func isExcluded(_ fullPath: String) -> Bool {
-        guard !spec.exclude.isEmpty else { return false }
-        let name = (fullPath as NSString).lastPathComponent
-        for pattern in spec.exclude {
-            if fnmatch(pattern, name, 0) == 0 || fnmatch(pattern, fullPath, 0) == 0 {
-                return true
-            }
-        }
-        return false
     }
 
     private func schedule() {
