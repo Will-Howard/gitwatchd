@@ -38,6 +38,9 @@ enum CLI {
         guard Git.isRepo(spec.workDir, gitDir: spec.gitDir) else {
             warn("not inside a git repo: \(spec.path)\n  run: git init \(spec.workDir)"); return 1
         }
+        guard !Config.specs().contains(where: { $0.path == spec.path }) else {
+            warn("already watching \(spec.name) (\(spec.path))"); return 1
+        }
 
         // Persist exactly what the user typed (gitwatch-style line).
         let line = args.map(Config.quoteIfNeeded).joined(separator: " ")

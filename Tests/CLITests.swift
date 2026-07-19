@@ -48,6 +48,17 @@ struct CLIContract {
         }
     }
 
+    @Test("adding the same repo twice fails and leaves one entry")
+    func duplicateAdd() {
+        withTemporaryConfig {
+            let repo = TestRepo()
+            _ = CLI.run([repo.path])
+            #expect(CLI.run([repo.path]) == 1)
+            #expect(CLI.run(["add", "-s", "5", repo.path]) == 1, "different flags, same repo")
+            #expect(Config.specs().count == 1)
+        }
+    }
+
     @Test("a bare `gitwatchd <path>` is an implicit add")
     func bareAdd() {
         withTemporaryConfig {
