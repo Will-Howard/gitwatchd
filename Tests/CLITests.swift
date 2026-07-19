@@ -136,6 +136,15 @@ struct CLIContract {
         }
     }
 
+    @Test("version and --version print instead of falling through to add")
+    func version() {
+        withTemporaryConfig {
+            #expect(CLI.run(["version"]) == 0)
+            #expect(CLI.run(["--version"]) == 0)
+            #expect(Config.specs().isEmpty)
+        }
+    }
+
     @Test("pausing an unknown repo fails")
     func pauseUnknown() {
         withTemporaryConfig {
@@ -171,7 +180,7 @@ struct HelpSync {
                              "-d": "%Y", "-x": "\\.log$", "-g": "/tmp/gd"]
     static let boolFlags = ["-R", "-M", "-f", "--paused"]
     static let commands = ["add", "ls", "rm", "pause", "resume", "status",
-                           "start", "stop", "autostart", "config", "help"]
+                           "start", "stop", "autostart", "config", "help", "version"]
 
     @Test("every documented flag is accepted by the parser")
     func documentedFlagsParse() {

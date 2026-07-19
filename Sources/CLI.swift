@@ -4,11 +4,14 @@ import AppKit
 // even when the daemon is down) and nudges the running daemon, which live-reloads.
 // `add` accepts gitwatch's own flags verbatim, so gitwatch users need no relearning.
 enum CLI {
+    static let version = "0.1.0"   // keep in step with Resources/Info.plist
+
     static func run(_ args: [String]) -> Int32 {
         guard let first = args.first else { printUsage(); return 0 }
 
         switch first {
         case "help", "-h", "--help": printUsage(); return 0
+        case "version", "--version": print("gitwatchd \(version)"); return 0
         case "ls", "list":           return list()
         case "rm", "remove":         return remove(Array(args.dropFirst()))
         case "pause":                return setPaused(Array(args.dropFirst()), true)
@@ -305,6 +308,7 @@ enum CLI {
           config [path|edit]    print the config file path, or open it in your
                                 editor (the one `git commit` uses)
           help                  show this help
+          version               print the version
 
         FLAGS (for add)
           -s <secs>     Wait <secs> after the last change before committing, so a
