@@ -16,7 +16,7 @@ enum CLI {
         case "pause":                return setPaused(Array(args.dropFirst()), true)
         case "resume":               return setPaused(Array(args.dropFirst()), false)
         case "status":               return status()
-        case "doctor":               return doctor()   // internal/undocumented: env diagnostic
+        case "doctor":               return doctor()
         case "start":                return startDaemon()
         case "stop":                 return stopDaemon()
         case "config":               return config(Array(args.dropFirst()))
@@ -121,9 +121,8 @@ enum CLI {
         return 0
     }
 
-    /// Internal, undocumented dev diagnostic (not in `help`): shows the environment
-    /// the login-launched DAEMON will use for git: the "works in terminal, fails
-    /// from the app" trap, made visible. Kept for debugging, not a user-facing feature.
+    /// Undocumented diagnostic: the environment the login-launched daemon
+    /// will use for git.
     private static func doctor() -> Int32 {
         let (env, captureError) = GitRuntime.loginShellEnv()   // what the daemon re-derives
         let git = GitRuntime.findGit(in: env)
@@ -193,9 +192,7 @@ enum CLI {
             warn("gitwatchd.app not found in /Applications or ~/Applications (run `make install`, or set GITWATCHD_APP)")
             return 1
         }
-        // openApplication is asynchronous: wait for its verdict instead of
-        // racing it (checking isDaemonRunning immediately reported a launch
-        // still in progress as a failure, and swallowed real launch errors).
+        // openApplication is asynchronous; wait for its verdict.
         let cfg = NSWorkspace.OpenConfiguration()
         cfg.activates = false
         var failure: String?
@@ -262,10 +259,7 @@ enum CLI {
 
     private static func warn(_ msg: String) { FileHandle.standardError.write(("✗ " + msg + "\n").data(using: .utf8)!) }
 
-    // Help format: examples first, one flag per line with <metavar>
-    // placeholders and defaults stated (per clig.dev and upstream gitwatch's
-    // own help). Brackets mean optional; <angle brackets> are placeholders.
-    // Exposed as a constant so tests can hold the help to the implementation.
+    // A constant so tests can hold the help to the implementation.
     private static func printUsage() { print(usageText) }
 
     static let usageText = """

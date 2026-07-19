@@ -4,9 +4,8 @@ import Foundation
 // engine. Behavior mirrors gitwatch: debounced auto-commit, optional push to a
 // remote/branch, optional pull --rebase, optional merge-commit guard.
 
-/// What one auto-commit cycle (or push retry) accomplished. The git commands and
-/// their order are gitwatch's; this only reports the result in a form the menu
-/// and tests can inspect, instead of a bare status string.
+/// What one auto-commit cycle (or push retry) accomplished. The git commands
+/// and their order are gitwatch's; this only reports the result.
 enum CommitOutcome: Equatable {
     case clean                            // nothing to commit
     case skippedMerge                     // -M: merge in progress, cycle skipped

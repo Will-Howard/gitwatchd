@@ -4,7 +4,7 @@ import Testing
 // The help text states flag defaults and exclusion behaviour as facts;
 // these tests pin them so the help can't silently drift from the code.
 
-@Suite("Flag defaults, as the help promises")
+@Suite("Flag defaults")
 struct FlagDefaults {
 
     @Test("a bare path gets exactly the documented defaults")
@@ -22,7 +22,7 @@ struct FlagDefaults {
         #expect(spec.paused == false)
     }
 
-    @Test("-p is accepted as an alias of -r, as upstream treats it")
+    @Test("-p is an alias of -r")
     func pAlias() {
         #expect(RepoSpecParser.parse(["-p", "origin", "/tmp/x"]).spec?.remote == "origin")
     }
@@ -35,7 +35,7 @@ struct FlagDefaults {
     }
 }
 
-@Suite("Exclusions (-x): a regex against the changed path, as upstream")
+@Suite("Exclusions (-x)")
 struct Exclusions {
 
     @Test("the regex matches anywhere in the path")
@@ -52,7 +52,7 @@ struct Exclusions {
         #expect(!spec.excludes("/tmp/x/src/out.o"))
     }
 
-    @Test("the last -x wins, as upstream's getopts does")
+    @Test("the last -x wins")
     func lastWins() {
         let spec = RepoSpecParser.parse(["-x", "\\.log$", "-x", "\\.tmp$", "/tmp/x"]).spec!
         #expect(spec.excludes("/tmp/x/b.tmp"))

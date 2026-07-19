@@ -46,7 +46,7 @@ struct AutoCommitCycle {
     }
 }
 
-@Suite("Push failures (fire-and-forget, now visible)")
+@Suite("Push failures")
 struct PushFailures {
 
     @Test("an unreachable remote reports pushFailed but the commit survives locally")
@@ -102,16 +102,13 @@ struct PushFailures {
     }
 }
 
-@Suite("Push command forms (-b), as the help promises")
+@Suite("Push command forms (-b)")
 struct PushForms {
 
     @Test("without -b, a plain `git push <remote>` lets git's config decide")
     func withoutBranch() {
-        let repo = TestRepo()
-        repo.write("a.txt", "1")
-        Git.autoCommit(repo.spec())
-        #expect(Git.pushArgs(remote: "origin", spec: repo.spec("-r", "origin"))
-                == ["push", "origin"])
+        let spec = RepoSpecParser.parse(["-r", "origin", "/tmp/x"]).spec!
+        #expect(Git.pushArgs(remote: "origin", spec: spec) == ["push", "origin"])
     }
 
     @Test("with -b, the current branch is pushed to it as <current>:<branch>")
@@ -149,7 +146,7 @@ struct PushForms {
     }
 }
 
-@Suite("Two-way sync (-R), as the help promises")
+@Suite("Two-way sync (-R)")
 struct TwoWaySync {
 
     @Test("commits made on another machine are pulled in and ours lands on top")
@@ -158,10 +155,7 @@ struct TwoWaySync {
         let origin = repo.addOrigin()
         repo.write("ours.txt", "base\n")
         Git.autoCommit(repo.spec("-r", "origin", "-b", "main"))
-        // pull --rebase runs with no branch argument (upstream's form), which
-        // needs tracking info, like the cloned repos this is normally run in.
-        repo.git("fetch", "-q", "origin")
-        repo.git("branch", "-q", "--set-upstream-to=origin/main", "main")
+        repo.trackOrigin()
 
         let colleague = TestRepo(cloneOf: origin)
         colleague.write("theirs.txt", "from the other machine\n")
@@ -188,7 +182,7 @@ struct MergeGuard {
         #expect(repo.midMerge, "the merge is left exactly as it was")
     }
 
-    @Test("without -M a mid-merge cycle commits, conflict markers and all (gitwatch parity)")
+    @Test("without -M a mid-merge cycle commits the conflicted merge")
     func commitsMidMergeWithoutFlag() {
         let repo = TestRepo.withConflictedMerge()
         #expect(Git.autoCommit(repo.spec()) == .committed)
@@ -196,7 +190,7 @@ struct MergeGuard {
     }
 }
 
-@Suite("Subdirectory and file targets, as upstream handles them")
+@Suite("Subdirectory and file targets")
 struct Targets {
 
     @Test("watching a subdirectory commits only changes under it")
@@ -237,7 +231,7 @@ struct Targets {
     }
 }
 
-@Suite("Detached git dir (-g), as the help promises")
+@Suite("Detached git dir (-g)")
 struct DetachedGitDir {
 
     @Test("a worktree whose .git lives elsewhere still commits and validates")
@@ -280,10 +274,7 @@ struct CommitAndRebaseFailures {
         let origin = repo.addOrigin()
         repo.write("shared.txt", "original\n")
         Git.autoCommit(repo.spec("-r", "origin", "-b", "main"))
-        // Upstream runs `pull --rebase <remote>` with no branch argument, which
-        // needs tracking info, just like the cloned repos gitwatch users run in.
-        repo.git("fetch", "-q", "origin")
-        repo.git("branch", "-q", "--set-upstream-to=origin/main", "main")
+        repo.trackOrigin()
 
         let colleague = TestRepo(cloneOf: origin)         // someone else pushes first
         colleague.write("shared.txt", "colleague's version\n")

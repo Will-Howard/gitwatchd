@@ -101,8 +101,7 @@ private func seed(_ repo: TestRepo, _ file: String = "seed.txt") {
 private func seedAndPush(_ repo: TestRepo) {
     seed(repo)
     repo.git("push", "-q", "origin", "main")
-    repo.git("fetch", "-q", "origin")
-    repo.git("branch", "-q", "--set-upstream-to=origin/main", "main")
+    repo.trackOrigin()
 }
 
 private func colleaguePushes(_ remote: BareRemote, file: String, message: String) {
@@ -113,19 +112,7 @@ private func colleaguePushes(_ remote: BareRemote, file: String, message: String
     colleague.git("push", "-q", "origin", "main")
 }
 
-private func conflictedMerge(_ repo: TestRepo) {
-    repo.write("f.txt", "base\n")
-    repo.git("add", "-A"); repo.git("commit", "-q", "-m", "base")
-    repo.git("checkout", "-q", "-b", "side")
-    repo.write("f.txt", "side\n")
-    repo.git("add", "-A"); repo.git("commit", "-q", "-m", "side edit")
-    repo.git("checkout", "-q", "main")
-    repo.write("f.txt", "main\n")
-    repo.git("add", "-A"); repo.git("commit", "-q", "-m", "main edit")
-    repo.git("merge", "side")   // conflicts, leaving MERGE_HEAD
-}
-
-@Suite("Parity with upstream gitwatch (differential, model-based)")
+@Suite("Parity with upstream gitwatch")
 struct GitwatchParity {
 
     @Test("a clean repo: neither side commits anything")
@@ -172,16 +159,16 @@ struct GitwatchParity {
     @Test("-M: both skip the cycle while a merge is in progress")
     func mergeGuard() {
         let r = twins(flags: ["-m", "cycle", "-M"], remote: false) { repo, _ in
-            conflictedMerge(repo)
+            repo.conflictedMerge()
         }
         #expect(r.ours == r.model)
         #expect(r.ours.midMerge, "the merge is left untouched on both sides")
     }
 
-    @Test("without -M: both commit the conflicted merge, warts and all")
+    @Test("without -M: both commit the conflicted merge")
     func mergeCommitted() {
         let r = twins(flags: ["-m", "cycle"], remote: false) { repo, _ in
-            conflictedMerge(repo)
+            repo.conflictedMerge()
         }
         #expect(r.ours == r.model)
         #expect(!r.ours.midMerge, "the cycle concluded the merge on both sides")

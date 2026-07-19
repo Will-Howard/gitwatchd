@@ -84,15 +84,33 @@ final class TestRepo {
         try! FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: hook)
     }
 
-    /// A repo stopped mid-merge on a real conflict, for the -M tests.
+    func commit(_ file: String, _ contents: String, message: String) {
+        write(file, contents)
+        git("add", "-A")
+        git("commit", "-q", "-m", message)
+    }
+
+    /// Set main to track origin/main, as a cloned repo would. The branch-less
+    /// `pull --rebase <remote>` needs it.
+    func trackOrigin() {
+        git("fetch", "-q", "origin")
+        git("branch", "-q", "--set-upstream-to=origin/main", "main")
+    }
+
+    /// Stop this repo mid-merge on a real conflict. Plain git only, so tests
+    /// never exercise the engine during their own setup.
+    func conflictedMerge() {
+        commit("f.txt", "base\n", message: "base")
+        git("checkout", "-q", "-b", "side")
+        commit("f.txt", "side\n", message: "side edit")
+        git("checkout", "-q", "main")
+        commit("f.txt", "main\n", message: "main edit")
+        git("merge", "side")            // conflicts, leaving MERGE_HEAD behind
+    }
+
     static func withConflictedMerge() -> TestRepo {
         let repo = TestRepo()
-        repo.write("f.txt", "base\n");  Git.autoCommit(repo.spec())
-        repo.git("checkout", "-q", "-b", "side")
-        repo.write("f.txt", "side\n");  Git.autoCommit(repo.spec())
-        repo.git("checkout", "-q", "main")
-        repo.write("f.txt", "main\n");  Git.autoCommit(repo.spec())
-        repo.git("merge", "side")       // conflicts, leaving MERGE_HEAD behind
+        repo.conflictedMerge()
         return repo
     }
 }

@@ -3,10 +3,7 @@ import Foundation
 // Pure string formatting for the menu. No AppKit in here, so `make test` can
 // assert exactly what the user will read.
 enum StatusFormat {
-    /// Main-menu row: "name · branch" plus at most one status tail.
-    /// Paused wins over errors; errors win over the pending count. Error rows
-    /// carry the tail only; the full story (detail, attempts, next retry) lives
-    /// in the repo's submenu.
+    /// One status tail at most: paused wins over errors, errors over pending.
     static func rowTitle(name: String, branch: String, paused: Bool,
                          pending: Int, errorLabel: String?) -> String {
         let base = "\(name) · \(branch)"
@@ -16,20 +13,15 @@ enum StatusFormat {
         return base
     }
 
-    /// Menu row for a config entry that can't be watched at all (unparseable
-    /// line, missing path, not a git repo). These must never disappear
-    /// silently. Short fixed-width row (reasons are a fixed vocabulary, no
-    /// paths); the full path lives in the row's submenu.
+    /// Fixed-width row; the full path lives in the row's submenu.
     static func configErrorRow(label: String, reason: String) -> String {
         truncated("⚠ \(label) · \(reason)", max: 48)
     }
 
-    /// Submenu headline for a failing repo.
     static func errorHeadline(label: String, attempts: Int) -> String {
         attempts > 1 ? "⚠ \(label) (\(attempts) attempts)" : "⚠ \(label)"
     }
 
-    /// Submenu line explaining when we last tried and what happens next.
     static func retryLine(lastTried: Date, nextRetry: Date?, now: Date) -> String {
         let tried = "tried " + ago(now.timeIntervalSince(lastTried))
         guard let nextRetry else { return tried + " · retries on next change" }
@@ -37,7 +29,6 @@ enum StatusFormat {
         return dt <= 1 ? tried + " · retrying now" : tried + " · retrying in " + span(dt)
     }
 
-    /// Clip an error detail to menu width.
     static func truncated(_ s: String, max: Int = 60) -> String {
         s.count <= max ? s : String(s.prefix(max - 1)) + "…"
     }
@@ -47,7 +38,6 @@ enum StatusFormat {
         seconds < 5 ? "just now" : span(seconds) + " ago"
     }
 
-    /// A duration in the largest sensible unit.
     static func span(_ seconds: TimeInterval) -> String {
         let s = Swift.max(1, Int(seconds.rounded()))
         if s < 90 { return "\(s)s" }
