@@ -9,7 +9,9 @@ import CoreServices
 
 // MARK: - Menu-bar daemon
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+    private let menu = NSMenu()
+    private var menuIsOpen = false
     private var statusItem: NSStatusItem!
     private var watchers: [RepoWatcher] = []
     private var configErrors: [ConfigError] = []
@@ -24,6 +26,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                    accessibilityDescription: "gitwatchd")
             button.image?.isTemplate = true
         }
+        menu.delegate = self
+        statusItem.menu = menu
 
         Config.ensureExists()
         if let envError = GitRuntime.resolved.error {
@@ -49,14 +53,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         configWatcher?.start()
 
-        // Refresh relative times / pending counts while the menu is open. Also
-        // re-check broken config entries: they can heal without the config
-        // changing (permission granted, volume mounted, repo re-created), and
-        // a one-shot verdict at reload would otherwise stay stale forever.
+        // Menu content is built on open (menuNeedsUpdate); this timer only
+        // keeps the icon current and re-checks broken config entries, which
+        // can heal without the config changing (permission granted, volume
+        // mounted, repo re-created).
         Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             guard let self else { return }
             if self.brokenRepoPaths.contains(where: { Git.isRepo($0) }) { self.reload() }
-            else { self.rebuildMenu() }
+            else { self.updateIcon() }
         }
     }
 
@@ -72,7 +76,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         brokenRepoPaths = errors.compactMap { $0.repoPath }
         watchers = watchable.map { spec in
             RepoWatcher(spec: spec) { [weak self] _, _ in
-                DispatchQueue.main.async { self?.rebuildMenu() }
+                DispatchQueue.main.async { self?.refresh() }
             }
         }
         watchers.forEach { $0.start() }
@@ -81,14 +85,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let newlyWatched = !previousPaths.contains(w.path)
             if resumed || (newlyWatched && w.spec.commitOnStart) { w.flushNow() }
         }
-        rebuildMenu()
+        refresh()
     }
 
     // MARK: Menu
 
-    private func rebuildMenu() {
+    func menuWillOpen(_ menu: NSMenu) { menuIsOpen = true }
+    func menuDidClose(_ menu: NSMenu) { menuIsOpen = false }
+    func menuNeedsUpdate(_ menu: NSMenu) { populateMenu() }
+
+    private func refresh() {
         updateIcon()
-        let menu = NSMenu()
+        if menuIsOpen { populateMenu() }
+    }
+
+    private func populateMenu() {
+        menu.removeAllItems()
 
         // If the login-shell environment failed to load, say so loudly: pushes would
         // silently use the wrong git/PATH otherwise.
@@ -138,8 +150,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         login.target = self
         menu.addItem(login)
         add(menu, "Quit gitwatchd", action: #selector(quit))
-
-        statusItem.menu = menu
     }
 
     private func repoSubmenu(for w: RepoWatcher) -> NSMenu {
@@ -192,7 +202,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             alert.informativeText = err + "\n\nTip: run “make install” so gitwatchd lives in /Applications, which makes this reliable."
             alert.runModal()
         }
-        rebuildMenu()
+        refresh()
     }
     @objc private func openConfig() { NSWorkspace.shared.open(URL(fileURLWithPath: Config.path)) }
     @objc private func copyConfigPath() { copyToPasteboard(Config.path) }
