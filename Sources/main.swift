@@ -1,5 +1,6 @@
 import AppKit
 import CoreServices
+import Network
 import UniformTypeIdentifiers
 
 // gitwatchd: one binary, two modes:
@@ -264,7 +265,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 }
 
-// MARK: - Minimal FSEvents directory watcher (used to live-reload the config)
+// MARK: - Network monitor (retry stalled pushes the moment we're back online)
+
+final class NetworkMonitor {
+    private let monitor = NWPathMonitor()
+    private let queue = DispatchQueue(label: "gitwatchd.network")
+    private var wasSatisfied: Bool?   // nil until the first path update
+    private let onRegain: () -> Void
+
+    init(onRegain: @escaping () -> Void) {
+        self.onRegain = onRegain
+    }
+
+    func start() {
+        monitor.pathUpdateHandler = { [weak self] path in
+            guard let self else { return }
+            let satisfied = path.status == .satisfied
+            // Only a genuine offline-to-online transition counts.
+            if satisfied, self.wasSatisfied == false { self.onRegain() }
+            self.wasSatisfied = satisfied
+        }
+        monitor.start(queue: queue)
+    }
+}
+
+// MARK: - Minimal FSEvents file watcher (used to live-reload the config)
 
 final class FileWatcher {
     private let path: String

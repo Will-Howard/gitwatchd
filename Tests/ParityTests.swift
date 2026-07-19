@@ -63,20 +63,9 @@ enum GitwatchReference {
     /// Run upstream gitwatch for exactly one commit cycle on `target`.
     @discardableResult
     static func runOneCycle(flags: [String], target: String) -> (code: Int32, out: String) {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/bin/bash")
-        p.arguments = [script, "-f"] + flags + [target]
         var env = ProcessInfo.processInfo.environment
         env["GW_INW_BIN"] = stubWatcher
-        p.environment = env
-        let pipe = Pipe(); p.standardOutput = pipe; p.standardError = pipe
-        do { try p.run() } catch { return (-1, "\(error)") }
-        DispatchQueue.global().asyncAfter(deadline: .now() + 20) {  // hang watchdog
-            if p.isRunning { p.terminate() }
-        }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        p.waitUntilExit()
-        return (p.terminationStatus, String(data: data, encoding: .utf8) ?? "")
+        return runProcess("/bin/bash", [script, "-f"] + flags + [target], env: env, timeout: 20)
     }
 }
 

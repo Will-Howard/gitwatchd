@@ -84,18 +84,23 @@ enum Config {
         try? text.write(toFile: path, atomically: true, encoding: .utf8)
     }
 
-    /// Remove any line whose parsed target path matches (by full path or basename).
-    /// Returns the number of lines removed.
+    /// True if `spec` is the repo the user means by `needle`: full path,
+    /// tilde path, or folder name.
+    static func matches(_ spec: RepoSpec, _ needle: String) -> Bool {
+        spec.path == (needle as NSString).expandingTildeInPath
+            || spec.name == needle || spec.path == needle
+    }
+
+    /// Remove matching lines; returns how many were removed.
     @discardableResult
     static func remove(matching needle: String) -> Int {
         guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return 0 }
-        let want = (needle as NSString).expandingTildeInPath
         var removed = 0
         let kept = text.split(separator: "\n", omittingEmptySubsequences: false).filter { rawSub in
             let line = String(rawSub).trimmingCharacters(in: .whitespaces)
             if line.isEmpty || line.hasPrefix("#") { return true }
             guard let spec = RepoSpecParser.parse(tokenize(line)).spec else { return true }
-            let match = spec.path == want || spec.name == needle || spec.path == needle
+            let match = matches(spec, needle)
             if match { removed += 1 }
             return !match
         }
@@ -110,14 +115,13 @@ enum Config {
     @discardableResult
     static func setPaused(matching needle: String, paused: Bool) -> Int {
         guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return 0 }
-        let want = (needle as NSString).expandingTildeInPath
         var changed = 0
         let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map { sub -> String in
             let line = String(sub)
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             guard !trimmed.isEmpty, !trimmed.hasPrefix("#"),
                   let spec = RepoSpecParser.parse(tokenize(trimmed)).spec,
-                  spec.path == want || spec.name == needle || spec.path == needle,
+                  matches(spec, needle),
                   let rewritten = togglingPaused(line: trimmed, path: spec.path, paused: paused)
             else { return line }
             changed += 1

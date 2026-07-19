@@ -1,6 +1,17 @@
 import Foundation
 import CoreServices
 
+/// Push retry backoff: 30s doubling to a 5 minute cap.
+enum Backoff {
+    static let first: TimeInterval = 30
+    static let cap: TimeInterval = 300
+
+    static func delay(afterFailures n: Int) -> TimeInterval {
+        guard n > 1 else { return first }
+        return Swift.min(first * pow(2, Double(n - 1)), cap)
+    }
+}
+
 // Native FSEvents watcher for one repo, with a debounce (gitwatch's -s) and
 // .git-churn filtering so our own commits don't retrigger the watcher. Also
 // honors gitwatch's -x exclude patterns. No fswatch, no Homebrew, no binary.

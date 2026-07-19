@@ -35,28 +35,42 @@ enum CommitOutcome: Equatable {
     }
 }
 
+/// Run a program and capture stdout+stderr, trimmed. `timeout` terminates a
+/// hung child.
+@discardableResult
+func runProcess(_ exe: String, _ args: [String], env: [String: String]? = nil,
+                cwd: String? = nil, timeout: TimeInterval? = nil) -> (code: Int32, out: String) {
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: exe)
+    p.arguments = args
+    if let env { p.environment = env }
+    if let cwd { p.currentDirectoryURL = URL(fileURLWithPath: cwd) }
+    let pipe = Pipe()
+    p.standardOutput = pipe
+    p.standardError = pipe
+    do { try p.run() } catch { return (-1, "\(error)") }
+    if let timeout {
+        DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+            if p.isRunning { p.terminate() }
+        }
+    }
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+    p.waitUntilExit()
+    let out = String(data: data, encoding: .utf8) ?? ""
+    return (p.terminationStatus, out.trimmingCharacters(in: .whitespacesAndNewlines))
+}
+
 enum Git {
     @discardableResult
     static func run(_ args: [String], in dir: String, gitDir: String? = nil) -> (code: Int32, out: String) {
-        let p = Process()
-        // Use the same git + environment the user's terminal would (see GitRuntime),
-        // so push auth works even when the daemon is launched at login.
-        p.executableURL = URL(fileURLWithPath: GitRuntime.resolved.gitPath)
-        p.environment = GitRuntime.resolved.env
         var full = args
         // -g repos get upstream's exact override on every call:
         // `git --work-tree $TARGETDIR --git-dir $GIT_DIR <cmd>`.
         if let gitDir { full = ["--work-tree", dir, "--git-dir", gitDir] + args }
-        p.arguments = full
-        p.currentDirectoryURL = URL(fileURLWithPath: dir)
-        let pipe = Pipe()
-        p.standardOutput = pipe
-        p.standardError = pipe
-        do { try p.run() } catch { return (-1, "\(error)") }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        p.waitUntilExit()
-        let out = String(data: data, encoding: .utf8) ?? ""
-        return (p.terminationStatus, out.trimmingCharacters(in: .whitespacesAndNewlines))
+        // The resolved git + environment match the user's terminal (see
+        // GitRuntime), so push auth works when launched at login.
+        return runProcess(GitRuntime.resolved.gitPath, full,
+                          env: GitRuntime.resolved.env, cwd: dir)
     }
 
     static func isRepo(_ dir: String, gitDir: String? = nil) -> Bool {

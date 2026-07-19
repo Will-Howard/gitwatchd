@@ -99,13 +99,7 @@ enum RepoSpecParser {
 
     /// Render the current date using gitwatch's strftime-style format via /bin/date.
     static func formattedDate(_ fmt: String) -> String {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/bin/date")
-        p.arguments = ["+\(fmt)"]
-        let pipe = Pipe(); p.standardOutput = pipe
-        do { try p.run() } catch { return "" }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        p.waitUntilExit()
-        return (String(data: data, encoding: .utf8) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let r = runProcess("/bin/date", ["+\(fmt)"])
+        return r.code == 0 ? r.out : ""
     }
 }

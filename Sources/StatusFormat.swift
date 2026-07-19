@@ -56,17 +56,3 @@ enum StatusFormat {
         return "\(Int((Double(s) / 86400).rounded()))d"
     }
 }
-
-/// Retry backoff for failed pushes: an additive reliability layer on top of
-/// gitwatch's fire-and-forget push (which never retries at all).
-enum Backoff {
-    static let first: TimeInterval = 30
-    static let cap: TimeInterval = 300
-
-    /// Delay before the next automatic retry after `n` consecutive failures:
-    /// 30s, 60s, 120s, 240s, then hold at 5 minutes.
-    static func delay(afterFailures n: Int) -> TimeInterval {
-        guard n > 1 else { return first }
-        return Swift.min(first * pow(2, Double(n - 1)), cap)
-    }
-}

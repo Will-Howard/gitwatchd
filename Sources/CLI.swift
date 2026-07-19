@@ -73,9 +73,7 @@ enum CLI {
         guard let needle = args.first else { warn("usage: gitwatchd \(verb) <name|path>"); return 1 }
         let n = Config.setPaused(matching: needle, paused: paused)
         guard n > 0 else {
-            // Distinguish "no such repo" from "already in that state".
-            let want = (needle as NSString).expandingTildeInPath
-            let known = Config.specs().contains { $0.path == want || $0.name == needle || $0.path == needle }
+            let known = Config.specs().contains { Config.matches($0, needle) }
             warn(known ? "\(needle) is already \(paused ? "paused" : "watching")"
                        : "no watched repo matches \(needle)")
             return 1
@@ -132,11 +130,11 @@ enum CLI {
         print("What the login-launched daemon will use for git:")
         if let captureError { print("  ⚠ env capture FAILED: \(captureError)") }
         print("  git binary     \(git)")
-        print("  git --version  \(capture(git, ["--version"], env).out)")
+        print("  git --version  \(runProcess(git, ["--version"], env: env).out)")
         print("  PATH           \(env["PATH"] ?? "(unset → minimal)")")
 
         if let sock = env["SSH_AUTH_SOCK"], !sock.isEmpty {
-            let keys = capture("/usr/bin/ssh-add", ["-l"], env)
+            let keys = runProcess("/usr/bin/ssh-add", ["-l"], env: env)
             let n = keys.code == 0 ? keys.out.split(separator: "\n").count : 0
             print("  SSH_AUTH_SOCK  present · \(n) key\(n == 1 ? "" : "s") in agent")
             if n == 0 { print("                 ⚠ no keys loaded: SSH pushes may fail. Add: ssh-add --apple-use-keychain ~/.ssh/id_ed25519") }
@@ -145,19 +143,6 @@ enum CLI {
         }
 
         return 0
-    }
-
-    /// Run a tool with an explicit environment and capture stdout+stderr.
-    private static func capture(_ exe: String, _ args: [String], _ env: [String: String]) -> (code: Int32, out: String) {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: exe)
-        p.arguments = args
-        p.environment = env
-        let pipe = Pipe(); p.standardOutput = pipe; p.standardError = pipe
-        do { try p.run() } catch { return (-1, "\(error)") }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        p.waitUntilExit()
-        return (p.terminationStatus, String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
     }
 
     private static func config(_ args: [String]) -> Int32 {
