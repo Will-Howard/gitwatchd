@@ -96,16 +96,17 @@ enum CLI {
         let (specs, errors) = Config.load()
         if specs.isEmpty && errors.isEmpty { print("No repos watched yet"); return 0 }
         print("Watching \(specs.count) repo\(specs.count == 1 ? "" : "s")")
+        print("")
         for s in specs {
             let branch = Git.currentBranch(s.workDir, gitDir: s.gitDir)
             let pending = Git.pendingCount(s.workDir, gitDir: s.gitDir)
-            print("  " + StatusFormat.rowTitle(name: s.name, branch: branch, paused: s.paused,
-                                               pending: pending, error: nil))
-            print("       " + Git.lastCommitSummary(s.workDir, gitDir: s.gitDir))
+            print(StatusFormat.rowTitle(name: s.name, branch: branch, paused: s.paused,
+                                        pending: pending, error: nil))
+            print("     " + Git.lastCommitSummary(s.workDir, gitDir: s.gitDir))
         }
         for e in errors {
-            print("  " + StatusFormat.configErrorRow(label: e.label, reason: e.reason))
-            print("       " + e.detail)
+            print(StatusFormat.configErrorRow(label: e.label, reason: e.reason))
+            print("     " + e.detail)
         }
         return 0
     }
