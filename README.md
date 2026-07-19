@@ -71,3 +71,4 @@ gitwatchd is a from-scratch Swift reimplementation of
 [gitwatch](https://github.com/gitwatch/gitwatch) by Patrick Lehner and
 contributors. The git behaviour is intended to match gitwatch exactly, and is
 tested differentially against it. GPL-3.0, like the original.
+Copyright (C) 2026 Will Howard.

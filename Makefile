@@ -28,7 +28,7 @@ SWIFTC      := swiftc
 SWIFT_FLAGS := -O -framework AppKit -framework CoreServices -framework ServiceManagement
 
 # Tier 3 config (override on the command line):
-DEV_ID         ?=
+DEV_ID         ?= Developer ID Application: Will Howard (452SH7Q736)
 NOTARY_PROFILE ?= gitwatchd-notary
 
 .PHONY: all run stop clean install uninstall sign-release notarize test
