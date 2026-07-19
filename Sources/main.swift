@@ -282,6 +282,14 @@ let userArgs = Array(CommandLine.arguments.dropFirst()).filter { !$0.hasPrefix("
 let launchedAsApp = Bundle.main.bundlePath.hasSuffix(".app")
 
 if userArgs.first == "serve" || (launchedAsApp && userArgs.isEmpty) {
+    // Two daemons (e.g. a dev copy plus the installed one) would race every
+    // watched repo.
+    let me = ProcessInfo.processInfo.processIdentifier
+    if NSRunningApplication.runningApplications(withBundleIdentifier: CLI.bundleID)
+        .contains(where: { $0.processIdentifier != me }) {
+        NSLog("gitwatchd: another instance is already running; exiting")
+        exit(0)
+    }
     // Daemon mode: re-derive the user's login-shell env for git (PATH, SSH, helpers).
     GitRuntime.isDaemon = true
     let app = NSApplication.shared
