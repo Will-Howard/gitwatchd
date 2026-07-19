@@ -7,16 +7,11 @@ import Foundation
 /// It would therefore find a different git than your terminal (missing a Homebrew
 /// git / credential helpers) and miss custom auth: the classic "works in the
 /// terminal, fails from the app" trap. To avoid it, the daemon re-derives your
-/// real login-shell environment (same technique as VS Code / exec-path-from-shell),
-/// optionally sourcing ~/.config/gitwatchd/env.sh for custom auth. The CLI already
-/// runs inside your shell, so it simply uses its own environment.
+/// real login-shell environment (same technique as VS Code / exec-path-from-shell).
+/// The CLI already runs inside your shell, so it simply uses its own environment.
 enum GitRuntime {
     /// Set true by the daemon entry point before any git call. Left false for the CLI.
     static var isDaemon = false
-
-    /// Optional user hook sourced during capture: a place to inject auth
-    /// (export tokens, `ssh-add`, set GIT_SSH, …).
-    static var envHookPath: String { (Config.dir as NSString).appendingPathComponent("env.sh") }
 
     struct Resolution {
         let gitPath: String
@@ -46,9 +41,8 @@ enum GitRuntime {
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
         let marker = "__GITWATCHD_ENV__"
         // -i -l → source login files (.zprofile/.bash_profile) AND interactive files
-        // (.zshrc/.bashrc), then our optional hook, then print env between markers.
+        // (.zshrc/.bashrc), then print env between markers.
         let script = """
-        [ -r \(quote(envHookPath)) ] && . \(quote(envHookPath)) 2>/dev/null
         printf '%s\\n' \(marker); /usr/bin/env; printf '%s\\n' \(marker)
         """
         let proc = Process()

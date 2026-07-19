@@ -1,10 +1,11 @@
 import AppKit
 import CoreServices
+import UniformTypeIdentifiers
 
 // gitwatchd: one binary, two modes:
 //   • launched as gitwatchd.app (or `gitwatchd serve`) → menu-bar daemon (this file)
 //   • run with CLI args (e.g. `gitwatchd .`)           → CLI.run (CLI.swift)
-// The menu-bar daemon watches ~/.config/gitwatchd/repos.txt, live-reloads on edit,
+// The menu-bar daemon watches ~/.gitwatchd, live-reloads on edit,
 // and auto-commits each repo on a debounce via native FSEvents + git.
 
 // MARK: - Menu-bar daemon
@@ -48,7 +49,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         networkMonitor?.start()
 
         // Live-reload when the config file (or CLI) changes it.
-        configWatcher = FileWatcher(path: Config.dir) { [weak self] in
+        configWatcher = FileWatcher(path: Config.path) { [weak self] in
             DispatchQueue.main.async { self?.reload() }
         }
         configWatcher?.start()
@@ -74,7 +75,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let (watchable, errors) = Config.load()
         configErrors = errors
         brokenRepoPaths = errors.compactMap { $0.repoPath }
-        StateStore.shared.prune(keeping: Set(watchable.map { $0.path }))
+        StateStore.prune(keeping: Set(watchable.map { $0.path }))
         watchers = watchable.map { spec in
             RepoWatcher(spec: spec) { [weak self] _, _ in
                 DispatchQueue.main.async { self?.refresh() }
@@ -124,7 +125,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 let title = StatusFormat.rowTitle(
                     name: w.spec.name, branch: branch, paused: w.paused,
                     pending: pending,
-                    errorLabel: StateStore.shared.status(for: w.path)?.errorLabel)
+                    errorLabel: StateStore.status(for: w.path)?.errorLabel)
                 let row = NSMenuItem(title: title, action: nil, keyEquivalent: "")
                 row.submenu = repoSubmenu(for: w)
                 menu.addItem(row)
@@ -157,7 +158,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func repoSubmenu(for w: RepoWatcher) -> NSMenu {
         let sub = NSMenu()
         add(sub, summarize(w.path), enabled: false)   // head-truncated so rows stay narrow
-        if let err = StateStore.shared.status(for: w.path) {
+        if let err = StateStore.status(for: w.path) {
             sub.addItem(.separator())
             add(sub, StatusFormat.errorHeadline(label: err.errorLabel, attempts: err.attempts),
                 enabled: false)
@@ -206,7 +207,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         refresh()
     }
-    @objc private func openConfig() { NSWorkspace.shared.open(URL(fileURLWithPath: Config.path)) }
+    // The config is an extensionless dotfile; open it with the user's default
+    // plain-text app rather than whatever LaunchServices guesses.
+    @objc private func openConfig() {
+        let url = URL(fileURLWithPath: Config.path)
+        if let editor = NSWorkspace.shared.urlForApplication(toOpen: UTType.plainText) {
+            NSWorkspace.shared.open([url], withApplicationAt: editor,
+                                    configuration: NSWorkspace.OpenConfiguration())
+        } else {
+            NSWorkspace.shared.open(url)
+        }
+    }
     @objc private func copyConfigPath() { copyToPasteboard(Config.path) }
     @objc private func quit() { NSApplication.shared.terminate(nil) }
 
@@ -215,7 +226,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Swap the menu-bar glyph to the attention variant while any repo is in an
     /// error state, back to the plain sync arrows when all are healthy.
     private func updateIcon() {
-        let failing = StateStore.shared.hasErrors || !configErrors.isEmpty
+        let failing = StateStore.hasErrors || !configErrors.isEmpty
         let symbol = failing ? "exclamationmark.arrow.triangle.2.circlepath"
                              : "arrow.triangle.2.circlepath"
         if let button = statusItem.button {

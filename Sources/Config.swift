@@ -10,21 +10,15 @@ struct ConfigError {
 // Config = a list of gitwatch-style argument lines, one repo per line.
 // Hand-editable and CLI-writable; the CLI appends exactly what the user typed.
 enum Config {
-    /// Tests point this at a scratch directory; nil means the real location.
-    static var overrideDir: String?
+    /// Tests point this at a scratch file; nil means the real location.
+    static var overridePath: String?
 
-    static var dir: String {
-        overrideDir ?? (NSHomeDirectory() as NSString).appendingPathComponent(".config/gitwatchd")
-    }
     static var path: String {
-        // .txt (not .conf) so "Open Config File" launches a sensible default app.
-        (dir as NSString).appendingPathComponent("repos.txt")
+        overridePath ?? (NSHomeDirectory() as NSString).appendingPathComponent(".gitwatchd")
     }
 
     static func ensureExists() {
-        let fm = FileManager.default
-        try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
-        guard !fm.fileExists(atPath: path) else { return }
+        guard !FileManager.default.fileExists(atPath: path) else { return }
         let template = """
         # gitwatchd: one repo per line.
         #   [-s secs] [-r remote [-b branch]] [-R] [-m msg] [-x pattern] [-M] [--paused] <path>

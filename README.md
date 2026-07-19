@@ -41,7 +41,7 @@ icon changes when something needs your attention. `gitwatchd help` covers the
 rest: pause/resume, excludes, and `-R` for pull-rebase-before-push when more
 than one machine syncs to the same branch.
 
-Repos live in `~/.config/gitwatchd/repos.txt`, one line per repo, same flags as
+Repos live in `~/.gitwatchd`, one line per repo, same flags as
 the CLI. Edit it by hand if you like (`gitwatchd config edit` opens it in your
 git editor); the daemon picks up changes live.
 

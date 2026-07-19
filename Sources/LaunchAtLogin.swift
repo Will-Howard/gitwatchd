@@ -39,25 +39,13 @@ enum LaunchAtLogin {
 
     // MARK: - First-run onboarding
 
-    /// Durable state dir, deliberately OUTSIDE ~/.config/gitwatchd so wiping config
-    /// doesn't reset onboarding and silently re-enable launch-at-login after an opt-out.
-    static var stateDir: String { AppSupport.dir }
-    /// Records the state the user wants ("on"/"off"). Its absence doubles as
-    /// the first-run marker. (Pre-record installs left an empty file; that
-    /// predates opt-out recording and means "on".)
-    static var desiredStateFile: String {
-        (stateDir as NSString).appendingPathComponent("first-run-complete")
-    }
-
     private static func recordDesired(_ on: Bool) {
-        try? FileManager.default.createDirectory(atPath: stateDir, withIntermediateDirectories: true)
-        try? (on ? "on" : "off").write(toFile: desiredStateFile, atomically: true, encoding: .utf8)
+        StateDB.set("launch-at-login", on ? "on" : "off")
     }
 
     /// nil = never onboarded; true/false = the state the user last chose.
     private static var recordedDesired: Bool? {
-        guard let s = try? String(contentsOfFile: desiredStateFile, encoding: .utf8) else { return nil }
-        return s.trimmingCharacters(in: .whitespacesAndNewlines) != "off"
+        StateDB.get("launch-at-login").map { $0 != "off" }
     }
 
     /// On every launch of an *installed* copy, make reality match recorded

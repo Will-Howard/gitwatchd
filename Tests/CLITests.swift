@@ -2,16 +2,16 @@ import Foundation
 import Testing
 
 // CLI contract tests run the real CLI.run against a scratch config directory
-// (never the user's ~/.config/gitwatchd) with daemon-launching disabled.
+// (never the user's ~/.gitwatchd) with daemon-launching disabled.
 // Serialized: the config override is process-global.
 
-/// Point the CLI at a scratch config dir for the duration of one test.
+/// Point the CLI at a scratch config file for the duration of one test.
 private func withTemporaryConfig(_ body: () throws -> Void) rethrows {
     CLI.spawnsDaemon = false
     let dir = TestDirs.fresh("config")
     try! FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-    Config.overrideDir = dir
-    defer { Config.overrideDir = nil }
+    Config.overridePath = dir + "/gitwatchd"
+    defer { Config.overridePath = nil }
     try body()
 }
 

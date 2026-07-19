@@ -116,7 +116,7 @@ uninstall:
 	done; true
 	@rm -rf "$$HOME/Library/Application Support/$(APP_NAME)"
 	@echo "✓ uninstalled: app, CLI link, login item, and first-run state cleared"
-	@echo "  (config at ~/.config/$(APP_NAME) kept: 'rm -rf ~/.config/$(APP_NAME)' to reset watched repos too)"
+	@echo "  (config at ~/.$(APP_NAME) kept: 'rm ~/.$(APP_NAME)' to reset watched repos too)"
 
 # --- Tier 3: Developer ID sign + notarize (entirely CLI; no Xcode.app) ---
 

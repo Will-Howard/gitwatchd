@@ -89,7 +89,7 @@ enum CLI {
     // MARK: - status / config / daemon
 
     /// The menu, rendered for the terminal: same rows, same strings, plus the
-    /// daemon's published error state (state.json) when it is running.
+    /// daemon's published error state when it is running.
     private static func status() -> Int32 {
         let running = isDaemonRunning()
         print("daemon:  \(running ? "running" : "not running")")
@@ -97,13 +97,13 @@ enum CLI {
         print("")
         let (specs, errors) = Config.load()
         if specs.isEmpty && errors.isEmpty { print("No repos watched yet"); return 0 }
-        let state = running ? StateStore.read() : nil
+        let daemonErrors = running ? StateStore.errors() : [:]
         print("Watching \(specs.count) repo\(specs.count == 1 ? "" : "s")")
         print("")
         for s in specs {
             let branch = Git.currentBranch(s.workDir, gitDir: s.gitDir)
             let pending = Git.pendingCount(s.workDir, gitDir: s.gitDir)
-            let err = state?.errors[s.path]
+            let err = daemonErrors[s.path]
             print(StatusFormat.rowTitle(name: s.name, branch: branch, paused: s.paused,
                                         pending: pending, errorLabel: err?.errorLabel))
             print("     " + Git.lastCommitSummary(s.workDir, gitDir: s.gitDir))
@@ -144,9 +144,6 @@ enum CLI {
             print("  SSH_AUTH_SOCK  (unset) ⚠ SSH pushes will fail from the daemon")
         }
 
-        let hook = GitRuntime.envHookPath
-        let hasHook = FileManager.default.fileExists(atPath: hook)
-        print("  env.sh hook    \(hasHook ? hook : "(none: create it to inject custom auth: tokens, ssh-add, GIT_SSH)")")
         return 0
     }
 
@@ -339,6 +336,6 @@ enum CLI {
                         what `gitwatchd pause` and the menu's Pause Watching set.
 
         The daemon lives in the menu bar and watches every repo listed in
-        ~/.config/gitwatchd/repos.txt (one gitwatch-style line per repo).
+        ~/.gitwatchd (one gitwatch-style line per repo). Edits to that file
         """
 }

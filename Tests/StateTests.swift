@@ -1,36 +1,32 @@
 import Foundation
 import Testing
 
-// The daemon publishes error state to a file; the menu and `gitwatchd status`
-// are both views over it. These tests pin the file round trip.
+// The daemon publishes error state into the SQLite state DB; the menu and
+// `gitwatchd status` are both views over it.
 
 private func withTemporaryStateDir(_ body: () throws -> Void) rethrows {
-    let dir = TestDirs.fresh("app-support")
-    try! FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-    AppSupport.overrideDir = dir
-    StateStore.shared.prune(keeping: [])
+    AppSupport.overrideDir = TestDirs.fresh("app-support")
     defer { AppSupport.overrideDir = nil }
     try body()
 }
 
-@Suite("Daemon state file", .serialized)
-struct DaemonStateFile {
+@Suite("Daemon state (SQLite)", .serialized)
+struct DaemonStateDB {
 
     @Test("a published error round-trips to a reader")
     func roundTrip() {
         withTemporaryStateDir {
             let tried = Date(timeIntervalSince1970: 1_000_000)
-            StateStore.shared.set("/tmp/x", RepoStatus(
+            StateStore.set("/tmp/x", RepoStatus(
                 errorLabel: "push failing", detail: "connection refused",
                 attempts: 3, lastAttempt: tried, nextRetry: tried.addingTimeInterval(120)))
-            let state = StateStore.read()
-            let err = state?.errors["/tmp/x"]
+            let err = StateStore.status(for: "/tmp/x")
             #expect(err?.errorLabel == "push failing")
             #expect(err?.detail == "connection refused")
             #expect(err?.attempts == 3)
             #expect(err?.lastAttempt == tried)
             #expect(err?.nextRetry == tried.addingTimeInterval(120))
-            #expect(state?.pid == ProcessInfo.processInfo.processIdentifier)
+            #expect(StateStore.errors().keys.sorted() == ["/tmp/x"])
         }
     }
 
@@ -38,15 +34,25 @@ struct DaemonStateFile {
     func clearAndPrune() {
         withTemporaryStateDir {
             let now = Date(timeIntervalSince1970: 1_000_000)
-            StateStore.shared.set("/tmp/a", RepoStatus(errorLabel: "push failing", detail: nil,
-                                                       attempts: 1, lastAttempt: now, nextRetry: nil))
-            StateStore.shared.set("/tmp/b", RepoStatus(errorLabel: "commit failing", detail: nil,
-                                                       attempts: 1, lastAttempt: now, nextRetry: nil))
-            StateStore.shared.set("/tmp/a", nil)
-            #expect(StateStore.read()?.errors.keys.sorted() == ["/tmp/b"])
-            StateStore.shared.prune(keeping: [])
-            #expect(StateStore.read()?.errors.isEmpty == true)
-            #expect(!StateStore.shared.hasErrors)
+            StateStore.set("/tmp/a", RepoStatus(errorLabel: "push failing", detail: nil,
+                                                attempts: 1, lastAttempt: now, nextRetry: nil))
+            StateStore.set("/tmp/b", RepoStatus(errorLabel: "commit failing", detail: nil,
+                                                attempts: 1, lastAttempt: now, nextRetry: nil))
+            StateStore.set("/tmp/a", nil)
+            #expect(StateStore.errors().keys.sorted() == ["/tmp/b"])
+            StateStore.prune(keeping: [])
+            #expect(StateStore.errors().isEmpty)
+            #expect(!StateStore.hasErrors)
+        }
+    }
+
+    @Test("plain settings share the same database")
+    func settings() {
+        withTemporaryStateDir {
+            StateDB.set("launch-at-login", "off")
+            #expect(StateDB.get("launch-at-login") == "off")
+            StateDB.set("launch-at-login", "on")
+            #expect(StateDB.get("launch-at-login") == "on")
         }
     }
 }

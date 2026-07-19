@@ -143,7 +143,7 @@ final class RepoWatcher {
             lastError = RepoError(outcome: outcome, lastAttempt: Date(),
                                   attempts: attempts, nextRetry: nil)
         }
-        StateStore.shared.set(path, lastError.map {
+        StateStore.set(path, lastError.map {
             RepoStatus(errorLabel: $0.outcome.errorLabel ?? "failing",
                        detail: $0.outcome.detail, attempts: $0.attempts,
                        lastAttempt: $0.lastAttempt, nextRetry: $0.nextRetry)
