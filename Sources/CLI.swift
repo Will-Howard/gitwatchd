@@ -88,21 +88,33 @@ enum CLI {
 
     // MARK: - status / config / daemon
 
-    /// The menu, rendered for the terminal: same rows, same strings.
+    /// The menu, rendered for the terminal: same rows, same strings, plus the
+    /// daemon's published error state (state.json) when it is running.
     private static func status() -> Int32 {
-        print("daemon:  \(isDaemonRunning() ? "running" : "not running")")
+        let running = isDaemonRunning()
+        print("daemon:  \(running ? "running" : "not running")")
         print("config:  \(Config.path)")
         print("")
         let (specs, errors) = Config.load()
         if specs.isEmpty && errors.isEmpty { print("No repos watched yet"); return 0 }
+        let state = running ? StateStore.read() : nil
         print("Watching \(specs.count) repo\(specs.count == 1 ? "" : "s")")
         print("")
         for s in specs {
             let branch = Git.currentBranch(s.workDir, gitDir: s.gitDir)
             let pending = Git.pendingCount(s.workDir, gitDir: s.gitDir)
+            let err = state?.errors[s.path]
             print(StatusFormat.rowTitle(name: s.name, branch: branch, paused: s.paused,
-                                        pending: pending, error: nil))
+                                        pending: pending, errorLabel: err?.errorLabel))
             print("     " + Git.lastCommitSummary(s.workDir, gitDir: s.gitDir))
+            if let err {
+                print("     " + StatusFormat.errorHeadline(label: err.errorLabel, attempts: err.attempts))
+                if let detail = err.detail, !detail.isEmpty {
+                    print("     " + StatusFormat.truncated(detail))
+                }
+                print("     " + StatusFormat.retryLine(lastTried: err.lastAttempt,
+                                                       nextRetry: err.nextRetry, now: Date()))
+            }
         }
         for e in errors {
             print(StatusFormat.configErrorRow(label: e.label, reason: e.reason))

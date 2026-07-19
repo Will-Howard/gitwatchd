@@ -8,10 +8,10 @@ enum StatusFormat {
     /// carry the tail only; the full story (detail, attempts, next retry) lives
     /// in the repo's submenu.
     static func rowTitle(name: String, branch: String, paused: Bool,
-                         pending: Int, error: CommitOutcome?) -> String {
+                         pending: Int, errorLabel: String?) -> String {
         let base = "\(name) · \(branch)"
         if paused { return base + " · ⏸ paused" }
-        if let label = error?.errorLabel { return base + " · ⚠ " + label }
+        if let errorLabel { return base + " · ⚠ " + errorLabel }
         if pending > 0 { return base + " · ✎ \(pending) pending" }
         return base
     }

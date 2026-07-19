@@ -74,6 +74,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let (watchable, errors) = Config.load()
         configErrors = errors
         brokenRepoPaths = errors.compactMap { $0.repoPath }
+        StateStore.shared.prune(keeping: Set(watchable.map { $0.path }))
         watchers = watchable.map { spec in
             RepoWatcher(spec: spec) { [weak self] _, _ in
                 DispatchQueue.main.async { self?.refresh() }
@@ -122,7 +123,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 // stays out of the main menu and lives in the submenu.
                 let title = StatusFormat.rowTitle(
                     name: w.spec.name, branch: branch, paused: w.paused,
-                    pending: pending, error: w.lastError?.outcome)
+                    pending: pending,
+                    errorLabel: StateStore.shared.status(for: w.path)?.errorLabel)
                 let row = NSMenuItem(title: title, action: nil, keyEquivalent: "")
                 row.submenu = repoSubmenu(for: w)
                 menu.addItem(row)
@@ -155,11 +157,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func repoSubmenu(for w: RepoWatcher) -> NSMenu {
         let sub = NSMenu()
         add(sub, summarize(w.path), enabled: false)   // head-truncated so rows stay narrow
-        if let err = w.lastError {
+        if let err = StateStore.shared.status(for: w.path) {
             sub.addItem(.separator())
-            add(sub, StatusFormat.errorHeadline(label: err.outcome.errorLabel ?? "failing",
-                                                attempts: err.attempts), enabled: false)
-            if let detail = err.outcome.detail, !detail.isEmpty {
+            add(sub, StatusFormat.errorHeadline(label: err.errorLabel, attempts: err.attempts),
+                enabled: false)
+            if let detail = err.detail, !detail.isEmpty {
                 add(sub, "   " + StatusFormat.truncated(detail), enabled: false)
             }
             add(sub, "   " + StatusFormat.retryLine(lastTried: err.lastAttempt,
@@ -213,7 +215,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Swap the menu-bar glyph to the attention variant while any repo is in an
     /// error state, back to the plain sync arrows when all are healthy.
     private func updateIcon() {
-        let failing = watchers.contains { $0.lastError != nil } || !configErrors.isEmpty
+        let failing = StateStore.shared.hasErrors || !configErrors.isEmpty
         let symbol = failing ? "exclamationmark.arrow.triangle.2.circlepath"
                              : "arrow.triangle.2.circlepath"
         if let button = statusItem.button {

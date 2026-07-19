@@ -10,32 +10,30 @@ struct MenuRowTitles {
     @Test("a healthy repo row is just name and branch")
     func healthy() {
         #expect(StatusFormat.rowTitle(name: "notes", branch: "main", paused: false,
-                                      pending: 0, error: nil)
+                                      pending: 0, errorLabel: nil)
                 == "notes · main")
     }
 
     @Test("pending edits show a count")
     func pending() {
         #expect(StatusFormat.rowTitle(name: "notes", branch: "main", paused: false,
-                                      pending: 3, error: nil)
+                                      pending: 3, errorLabel: nil)
                 == "notes · main · ✎ 3 pending")
     }
 
-    @Test("a failing push flags the row; detail stays in the submenu")
+    @Test("an error label flags the row; detail stays in the submenu")
     func pushFailing() {
         #expect(StatusFormat.rowTitle(name: "notes", branch: "main", paused: false,
-                                      pending: 0, error: .pushFailed(detail: "x"))
+                                      pending: 0, errorLabel: "push failing")
                 == "notes · main · ⚠ push failing")
     }
 
-    @Test("rebase conflicts and commit failures get their own labels")
-    func otherFailureLabels() {
-        #expect(StatusFormat.rowTitle(name: "notes", branch: "main", paused: false,
-                                      pending: 0, error: .rebaseConflict(detail: "x"))
-                == "notes · main · ⚠ rebase conflict")
-        #expect(StatusFormat.rowTitle(name: "notes", branch: "main", paused: false,
-                                      pending: 0, error: .commitFailed(detail: "x"))
-                == "notes · main · ⚠ commit failing")
+    @Test("each failure outcome carries its own label")
+    func outcomeLabels() {
+        #expect(CommitOutcome.pushFailed(detail: "x").errorLabel == "push failing")
+        #expect(CommitOutcome.rebaseConflict(detail: "x").errorLabel == "rebase conflict")
+        #expect(CommitOutcome.commitFailed(detail: "x").errorLabel == "commit failing")
+        #expect(CommitOutcome.pushed.errorLabel == nil)
     }
 
     @Test("a config entry that can't be watched is flagged with a short reason, no path")
@@ -50,7 +48,7 @@ struct MenuRowTitles {
     @Test("paused beats every other tail")
     func pausedWins() {
         #expect(StatusFormat.rowTitle(name: "notes", branch: "main", paused: true,
-                                      pending: 3, error: .pushFailed(detail: "x"))
+                                      pending: 3, errorLabel: "push failing")
                 == "notes · main · ⏸ paused")
     }
 }

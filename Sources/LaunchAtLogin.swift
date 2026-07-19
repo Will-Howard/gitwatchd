@@ -41,9 +41,7 @@ enum LaunchAtLogin {
 
     /// Durable state dir, deliberately OUTSIDE ~/.config/gitwatchd so wiping config
     /// doesn't reset onboarding and silently re-enable launch-at-login after an opt-out.
-    static var stateDir: String {
-        (NSHomeDirectory() as NSString).appendingPathComponent("Library/Application Support/gitwatchd")
-    }
+    static var stateDir: String { AppSupport.dir }
     /// Records the state the user wants ("on"/"off"). Its absence doubles as
     /// the first-run marker. (Pre-record installs left an empty file; that
     /// predates opt-out recording and means "on".)
