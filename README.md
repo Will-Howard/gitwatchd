@@ -1,5 +1,7 @@
 # gitwatchd
 
+[![test](https://github.com/Will-Howard/gitwatchd/actions/workflows/test.yml/badge.svg)](https://github.com/Will-Howard/gitwatchd/actions/workflows/test.yml)
+
 Auto-commit and sync your git repos, from the macOS menu bar.
 
 [gitwatch](https://github.com/gitwatch/gitwatch) is a great idea: watch a repo,
