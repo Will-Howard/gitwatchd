@@ -24,12 +24,6 @@ enum StatusFormat {
         truncated("⚠ \(label) · \(reason)", max: 48)
     }
 
-    static func cliState(paused: Bool, pending: Int) -> String {
-        if paused { return "⏸ paused" }
-        if pending > 0 { return "✎ \(pending) pending" }
-        return "✓ idle"
-    }
-
     /// Submenu headline for a failing repo.
     static func errorHeadline(label: String, attempts: Int) -> String {
         attempts > 1 ? "⚠ \(label) (\(attempts) attempts)" : "⚠ \(label)"

@@ -12,7 +12,6 @@ enum CLI {
         switch first {
         case "help", "-h", "--help": printUsage(); return 0
         case "version", "--version": print("gitwatchd \(version)"); return 0
-        case "ls", "list":           return list()
         case "rm", "remove":         return remove(Array(args.dropFirst()))
         case "pause":                return setPaused(Array(args.dropFirst()), true)
         case "resume":               return setPaused(Array(args.dropFirst()), false)
@@ -50,28 +49,9 @@ enum CLI {
         Config.append(line)
         ensureDaemonRunning()
 
-        let pushNote = spec.remote.map { "→ \($0)/\(spec.branch ?? Git.currentBranch(spec.path))" } ?? "local only"
+        let pushNote = spec.remote.map { "→ \($0)/\(spec.branch ?? Git.currentBranch(spec.workDir))" } ?? "local only"
         print("✓ watching  \(spec.name)  (\(spec.path))  \(pushNote), settle \(Int(spec.settle))s")
-        print("  gitwatchd ls   to see status")
-        return 0
-    }
-
-    // MARK: - ls
-
-    private static func list() -> Int32 {
-        let (specs, errors) = Config.load()
-        if specs.isEmpty && errors.isEmpty { print("No repos watched."); return 0 }
-        for s in specs {
-            let branch = Git.currentBranch(s.workDir, gitDir: s.gitDir)
-            let pending = Git.pendingCount(s.workDir, gitDir: s.gitDir)
-            let state = StatusFormat.cliState(paused: s.paused, pending: pending)
-            let dest = s.remote.map { " → \($0)/\(s.branch ?? branch)" } ?? ""
-            print("  \(state.padding(toLength: 14, withPad: " ", startingAt: 0)) \(s.name)  (\(s.path))  \(branch)\(dest)")
-        }
-        for e in errors {   // same information the menu shows
-            let place = e.label == e.detail ? e.label : "\(e.label)  (\(e.detail))"
-            print("  ⚠ \(e.reason): \(place)")
-        }
+        print("  gitwatchd status   to see everything watched")
         return 0
     }
 
@@ -108,11 +88,25 @@ enum CLI {
 
     // MARK: - status / config / daemon
 
+    /// The menu, rendered for the terminal: same rows, same strings.
     private static func status() -> Int32 {
-        let running = isDaemonRunning()
-        print("daemon:  \(running ? "running" : "not running")")
+        print("daemon:  \(isDaemonRunning() ? "running" : "not running")")
         print("config:  \(Config.path)")
-        print("repos:   \(Config.specs().count)")
+        print("")
+        let (specs, errors) = Config.load()
+        if specs.isEmpty && errors.isEmpty { print("No repos watched yet"); return 0 }
+        print("Watching \(specs.count) repo\(specs.count == 1 ? "" : "s")")
+        for s in specs {
+            let branch = Git.currentBranch(s.workDir, gitDir: s.gitDir)
+            let pending = Git.pendingCount(s.workDir, gitDir: s.gitDir)
+            print("  " + StatusFormat.rowTitle(name: s.name, branch: branch, paused: s.paused,
+                                               pending: pending, error: nil))
+            print("       " + Git.lastCommitSummary(s.workDir, gitDir: s.gitDir))
+        }
+        for e in errors {
+            print("  " + StatusFormat.configErrorRow(label: e.label, reason: e.reason))
+            print("       " + e.detail)
+        }
         return 0
     }
 
@@ -292,16 +286,15 @@ enum CLI {
           gitwatchd -r origin -b main -R .  two-way sync: fetch commits made on
                                             other machines and rebase yours on top
                                             before each push to origin/main
-          gitwatchd ls                      see everything being watched
+          gitwatchd status                  see everything being watched
           gitwatchd rm blog                 stop watching, by name or path
 
         COMMANDS
           add [flags] <path>    watch a repo (bare `gitwatchd [flags] <path>` works too)
-          ls                    list watched repos with status
           rm <name|path>        stop watching a repo
           pause <name|path>     stop watching temporarily; the repo stays listed
           resume <name|path>    start watching again and commit what piled up
-          status                daemon and config summary
+          status                everything the menu shows, in the terminal
           start, stop           start or stop the menu-bar daemon
           autostart [on|off|status]
                                 launch the daemon at login (on by default on install)

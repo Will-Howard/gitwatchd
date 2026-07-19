@@ -152,7 +152,7 @@ struct CLIContract {
         }
     }
 
-    @Test("broken config entries surface in load() and ls, like the menu")
+    @Test("broken config entries surface in load() and status, like the menu")
     func configErrorsSurface() {
         withTemporaryConfig {
             let repo = TestRepo()
@@ -164,7 +164,7 @@ struct CLIContract {
             #expect(errors.count == 2)
             #expect(errors.contains { $0.reason == "repo not found" })
             #expect(errors.contains { $0.reason.contains("unknown flag") })
-            #expect(CLI.run(["ls"]) == 0, "ls renders them rather than crashing or hiding them")
+            #expect(CLI.run(["status"]) == 0, "status renders them rather than crashing or hiding them")
         }
     }
 }
@@ -179,7 +179,7 @@ struct HelpSync {
     static let valueFlags = ["-s": "2", "-r": "origin", "-b": "main", "-m": "msg",
                              "-d": "%Y", "-x": "\\.log$", "-g": "/tmp/gd"]
     static let boolFlags = ["-R", "-M", "-f", "--paused"]
-    static let commands = ["add", "ls", "rm", "pause", "resume", "status",
+    static let commands = ["add", "rm", "pause", "resume", "status",
                            "start", "stop", "autostart", "config", "help", "version"]
 
     @Test("every documented flag is accepted by the parser")
