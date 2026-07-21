@@ -314,7 +314,6 @@ enum CLI {
           --paused      Keep the repo in the config but don't watch it. This is
                         what `gitwatchd pause` and the menu's Pause Watching set.
 
-        The daemon lives in the menu bar and watches every repo listed in
-        ~/.gitwatchd (one gitwatch-style line per repo). Edits to that file
+        The daemon lives in the menu bar and watches every repo listed in ~/.gitwatchd
         """
 }
