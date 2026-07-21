@@ -6,8 +6,5 @@ build/
 CLAUDE.local.md
 NOTES.md
 
-# Local end-to-end fiddling repos (devbox remote); never part of this repo
-test-repos/
-
 # Code-signing material (private key + CSR); never part of this repo
 signing/
