@@ -2,73 +2,64 @@
 
 [![test](https://github.com/Will-Howard/gitwatchd/actions/workflows/test.yml/badge.svg)](https://github.com/Will-Howard/gitwatchd/actions/workflows/test.yml)
 
-Auto-commit and sync your git repos, from the macOS menu bar.
+MacOS daemon to watch a file or folder and automatically commit changes to a git repo. Modelled after [gitwatch](https://github.com/gitwatch/gitwatch), but always-running by default.
 
-[gitwatch](https://github.com/gitwatch/gitwatch) is a great idea: watch a repo,
-auto-commit every change, optionally push it. The flaw is that you have to leave
-it running in a terminal somewhere, which kills the utility of just trusting
-that it's always on. gitwatchd is the same idea as a proper Mac citizen: a
-menu-bar daemon that starts at login, watches your repos in the background, and
-shows you what it's doing (and what's failing). If you're comfortable with git,
-it covers a lot of what people use Dropbox for.
+## Installation
 
-## Install
-
-Requires macOS 13+ and the Xcode command-line tools (`xcode-select --install`).
-You never open Xcode.
-
-```sh
-git clone https://github.com/Will-Howard/gitwatchd.git
-cd gitwatchd
-make install
+```
+brew tap will-howard/tap
+brew trust --cask will-howard/tap/gitwatchd
+brew install --cask gitwatchd
 ```
 
-That builds the app, puts it in /Applications, puts the `gitwatchd` CLI on your
-PATH, and launches it. It registers itself to start at login, because always-on
-is the point; turn that off in the menu if you don't want it. `make uninstall`
-removes everything.
+Or download the zip from [releases](https://github.com/Will-Howard/gitwatchd/releases) and put gitwatchd.app in /Applications.
 
-macOS will ask once for permission to access the folders your repos live in.
+## Usage
 
-## Use
+_Behaviour matches the original [gitwatch](https://github.com/gitwatch/gitwatch) script (enforced by [tests](TODO link to parity tests)), so you can use `gitwatchd` as a drop-in replacement._
 
-```sh
-cd ~/code/my-notes
-gitwatchd -r origin -b main .
-```
+Watch a repo:
 
-Edit a file, wait a couple of seconds, and it's committed and pushed. The
-menu-bar icon shows every watched repo, what's pending, and what's failing; the
-icon changes when something needs your attention. `gitwatchd help` covers the
-rest: pause/resume, excludes, and `-R` for pull-rebase-before-push when more
-than one machine syncs to the same branch.
+    gitwatchd .
 
-Repos live in `~/.gitwatchd`, one line per repo, same flags as
-the CLI. Edit it by hand if you like (`gitwatchd config edit` opens it in your
-git editor); the daemon picks up changes live.
+Every change is now committed automatically (debounced, so a burst of writes lands as one commit). Add a remote to push each commit too:
 
-## What it does to your repo, honestly
+    gitwatchd -r origin .
 
-- It commits everything that isn't gitignored, on a debounce. If your
-  `.gitignore` is sloppy, that includes secrets and half-finished work. Use it
-  on repos where "commit everything, often" is what you actually want.
-- It never force-pushes and never resolves conflicts. If a rebase hits a
-  conflict it stops, flags it in the menu, and leaves the repo for you to fix.
-- If a push fails (offline, server down), the commit stays local and gitwatchd
-  retries with backoff, and immediately when the network comes back.
+For something like a notes vault synced across machines, add `-R` pull and rebase before each push:
 
-## If pushes work in your terminal but not from the app
+    gitwatchd -r origin -b main -R .
 
-A login-launched app doesn't get your shell environment, which normally breaks
-SSH keys and credential helpers. gitwatchd re-derives your login shell's
-environment at startup (the same trick VS Code uses), so the daemon pushes with
-the same git and SSH agent your terminal uses. If something is still off,
-`gitwatchd doctor` shows exactly what the daemon sees.
+This is the full list of available flags:
+
+    -s <secs>     wait this long after the last change before committing (default 2)
+    -r <remote>   push to this remote after every commit
+    -b <branch>   branch to push to (with -r)
+    -R            pull --rebase before each push
+    -m <msg>      commit message; %d becomes the timestamp
+    -d <fmt>      strftime format for that timestamp
+    -x <pattern>  skip changes whose path matches this regex
+    -M            don't commit while a merge is in progress
+    -f            commit anything already pending when watching starts
+    -g <path>     location of the .git directory, if elsewhere
+
+gitwatchd runs as an app in the top bar (this is the ~only legit way to have an always-running app on MacOS). You can manage what's being watched from here or from the terminal.
+
+<img src="docs/menu.png" alt="The gitwatchd menu" width="444">
+
+Terminal commands to manage what's being watched:
+
+    gitwatchd status
+    gitwatchd pause blog      # by name or path
+    gitwatchd resume blog
+    gitwatchd rm blog
+
+The set of repos to watch is stored in `~/.gitwatchd`, you can also edit this file directly rather than using the terminal or top bar app.
+
+<!-- TODO add troubleshooting in future if people have problems with things like SSH keys -->
 
 ## Credit and license
 
-gitwatchd is a from-scratch Swift reimplementation of
+gitwatchd is a daemon (i.e. running in the background) reimplementation of
 [gitwatch](https://github.com/gitwatch/gitwatch) by Patrick Lehner and
-contributors. The git behaviour is intended to match gitwatch exactly, and is
-tested differentially against it. GPL-3.0, like the original.
-Copyright (C) 2026 Will Howard.
+contributors. Free software under the [GNU GPL v3.0](LICENSE), same as gitwatch.
