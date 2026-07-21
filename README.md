@@ -43,7 +43,7 @@ This is the full list of available flags:
     -f            commit anything already pending when watching starts
     -g <path>     location of the .git directory, if elsewhere
 
-gitwatchd runs as an app in the top bar (this is the ~only legit way to have an always-running app on MacOS). You can manage what's being watched from here or from the terminal.
+gitwatchd runs as an app in the top bar (this is the ~only legit way to have an always-running app on MacOS). You can manage what's being watched from there or from the terminal.
 
 <img src="docs/menu.png" alt="The gitwatchd menu" width="444">
 
