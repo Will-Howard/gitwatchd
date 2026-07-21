@@ -2,21 +2,9 @@
 
 [![test](https://github.com/Will-Howard/gitwatchd/actions/workflows/test.yml/badge.svg)](https://github.com/Will-Howard/gitwatchd/actions/workflows/test.yml)
 
-MacOS daemon to watch a file or folder and automatically commit changes to a git repo.
-
-## Installation
-
-```
-brew tap will-howard/tap
-brew trust --cask will-howard/tap/gitwatchd
-brew install --cask gitwatchd
-```
-
-Or download the zip from [releases](https://github.com/Will-Howard/gitwatchd/releases) and put gitwatchd.app in /Applications.
+MacOS daemon to watch a file or folder and automatically commit changes to a git repo. Behaviour matches the original [gitwatch](https://github.com/gitwatch/gitwatch) bash script, so you can use `gitwatchd` as a drop-in replacement.
 
 ## Usage
-
-_Behaviour matches the original [gitwatch](https://github.com/gitwatch/gitwatch) script (enforced by [tests](Tests/ParityTests.swift)), so you can use `gitwatchd` as a drop-in replacement._
 
 Watch a repo:
 
@@ -55,6 +43,16 @@ Terminal commands to manage what's being watched:
     gitwatchd rm blog
 
 The set of repos to watch is stored in `~/.gitwatchd`, you can also edit this file directly rather than using the terminal or top bar app.
+
+## Installation
+
+```
+brew tap will-howard/tap
+brew trust --cask will-howard/tap/gitwatchd
+brew install --cask gitwatchd
+```
+
+Or download the zip from [releases](https://github.com/Will-Howard/gitwatchd/releases) and put gitwatchd.app in /Applications.
 
 <!-- TODO add troubleshooting in future if people have problems with things like SSH keys -->
 
