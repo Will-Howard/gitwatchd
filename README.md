@@ -2,7 +2,7 @@
 
 [![test](https://github.com/Will-Howard/gitwatchd/actions/workflows/test.yml/badge.svg)](https://github.com/Will-Howard/gitwatchd/actions/workflows/test.yml)
 
-MacOS daemon to watch a file or folder and automatically commit changes to a git repo. Modelled after [gitwatch](https://github.com/gitwatch/gitwatch), but always-running by default.
+MacOS daemon to watch a file or folder and automatically commit changes to a git repo.
 
 ## Installation
 
@@ -16,7 +16,7 @@ Or download the zip from [releases](https://github.com/Will-Howard/gitwatchd/rel
 
 ## Usage
 
-_Behaviour matches the original [gitwatch](https://github.com/gitwatch/gitwatch) script (enforced by [tests](TODO link to parity tests)), so you can use `gitwatchd` as a drop-in replacement._
+_Behaviour matches the original [gitwatch](https://github.com/gitwatch/gitwatch) script (enforced by [tests](Tests/ParityTests.swift)), so you can use `gitwatchd` as a drop-in replacement._
 
 Watch a repo:
 
