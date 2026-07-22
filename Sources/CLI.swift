@@ -4,7 +4,7 @@ import AppKit
 // even when the daemon is down) and nudges the running daemon, which live-reloads.
 // `add` accepts gitwatch's own flags verbatim, so gitwatch users need no relearning.
 enum CLI {
-    static let version = "0.1.0"   // keep in step with Resources/Info.plist
+    static let version = "0.1.1"   // keep in step with Resources/Info.plist
 
     static func run(_ args: [String]) -> Int32 {
         guard let first = args.first else { printUsage(); return 0 }
