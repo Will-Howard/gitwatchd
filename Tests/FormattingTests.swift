@@ -18,7 +18,10 @@ struct MenuRowTitles {
     func pending() {
         #expect(StatusFormat.rowTitle(name: "notes", branch: "main", paused: false,
                                       pending: 3, errorLabel: nil)
-                == "notes · main · ✎ 3 pending")
+                == "notes · main · 3 pending changes")
+        #expect(StatusFormat.rowTitle(name: "notes", branch: "main", paused: false,
+                                      pending: 1, errorLabel: nil)
+                == "notes · main · 1 pending change")
     }
 
     @Test("an error label flags the row; detail stays in the submenu")

@@ -9,7 +9,8 @@ enum StatusFormat {
         let base = "\(name) · \(branch)"
         if paused { return base + " · ⏸ paused" }
         if let errorLabel { return base + " · ⚠ " + errorLabel }
-        if pending > 0 { return base + " · ✎ \(pending) pending" }
+        if pending == 1 { return base + " · 1 pending change" }
+        if pending > 1 { return base + " · \(pending) pending changes" }
         return base
     }
 
