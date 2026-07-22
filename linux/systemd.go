@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 )
 
 // Autostart = a systemd user unit, the standard way for a per-user daemon to
@@ -67,6 +69,16 @@ WantedBy=default.target
 		return 1
 	}
 	systemctlUser("daemon-reload")
+	// A directly spawned daemon holds the single-instance lock and would
+	// make the unit fail; hand it over to systemd.
+	if isDaemonRunning() && !unitActive() {
+		if pid := daemonPid(); pid > 0 {
+			syscall.Kill(pid, syscall.SIGTERM)
+			for i := 0; i < 50 && isDaemonRunning(); i++ {
+				time.Sleep(100 * time.Millisecond)
+			}
+		}
+	}
 	if code, out := systemctlUser("enable", "--now", "gitwatchd"); code != 0 {
 		warn("systemctl --user enable --now gitwatchd failed: " + out)
 		return 1

@@ -30,6 +30,8 @@ type RepoSpec struct {
 	Paused        bool    // --paused (gitwatchd extension, not gitwatch:
 	//                       config-level so a pause survives restarts)
 	Raw string // the config line this spec came from, for change detection
+
+	targetIndex int // which arg was the target, so add can persist it resolved
 }
 
 func (s RepoSpec) Name() string { return filepath.Base(s.Path) }
@@ -132,6 +134,7 @@ func parseRepoSpec(args []string) (*RepoSpec, string) {
 				return nil, "unknown flag " + a
 			}
 			target = a // last bare arg wins as the target
+			spec.targetIndex = i
 			haveTarget = true
 		}
 		i++

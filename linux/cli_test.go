@@ -58,6 +58,20 @@ func TestAddPersistsExactlyWhatWasTyped(t *testing.T) {
 	}
 }
 
+func TestAddResolvesARelativeTargetForTheDaemon(t *testing.T) {
+	withTemporaryConfig(t)
+	repo := newTestRepo(t)
+	t.Chdir(repo.path)
+	if cliRun([]string{"-s", "5", "."}) != 0 {
+		t.Fatal("add failed")
+	}
+	// The daemon reads the config from a different working directory, so
+	// the stored target must be absolute; the flags stay verbatim.
+	if got := configRawLines()[0]; got != "-s 5 "+repo.path {
+		t.Errorf("got %q", got)
+	}
+}
+
 func TestDuplicateAddFailsAndLeavesOneEntry(t *testing.T) {
 	withTemporaryConfig(t)
 	repo := newTestRepo(t)

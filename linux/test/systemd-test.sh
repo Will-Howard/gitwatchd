@@ -32,16 +32,17 @@ for i in $(seq 1 30); do
 done
 
 echo "== starting a user session for dev"
+uid=$(docker exec gw-systemd id -u dev)
 docker exec gw-systemd loginctl enable-linger dev
 for i in $(seq 1 30); do
-  if docker exec gw-systemd test -S /run/user/1000/bus; then break; fi
+  if docker exec gw-systemd test -S "/run/user/$uid/bus" 2>/dev/null; then break; fi
   sleep 1
 done
 
 as_dev() {
   docker exec -u dev \
-    -e XDG_RUNTIME_DIR=/run/user/1000 \
-    -e DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
+    -e XDG_RUNTIME_DIR=/run/user/$uid \
+    -e DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus \
     -e HOME=/home/dev -e USER=dev \
     gw-systemd "$@"
 }
@@ -61,7 +62,7 @@ echo "== the daemon auto-commits a change"
 as_dev sh -c 'echo hello > ~/notes/hello.txt'
 for i in $(seq 1 30); do
   n=$(as_dev sh -c 'cd ~/notes && git rev-list --count HEAD 2>/dev/null' || echo 0)
-  [ "$n" = "1" ] && break
+  if [ "$n" = "1" ]; then break; fi
   sleep 1
 done
 test "$n" = "1"
@@ -81,7 +82,7 @@ echo "== the daemon survives a unit restart and still commits"
 as_dev sh -c 'echo more >> ~/notes/hello.txt'
 for i in $(seq 1 30); do
   n=$(as_dev sh -c 'cd ~/notes && git rev-list --count HEAD')
-  [ "$n" = "2" ] && break
+  if [ "$n" = "2" ]; then break; fi
   sleep 1
 done
 test "$n" = "2"

@@ -83,9 +83,14 @@ func cliAdd(args []string) int {
 		}
 	}
 
-	// Persist exactly what the user typed (gitwatch-style line).
+	// Persist what the user typed (gitwatch-style line), with the target
+	// resolved to an absolute path: the daemon reads this file from a
+	// different working directory, so `gitwatchd .` must not store ".".
 	quoted := make([]string, len(args))
 	for i, a := range args {
+		if i == spec.targetIndex {
+			a = spec.Path
+		}
 		quoted[i] = quoteIfNeeded(a)
 	}
 	configAppend(strings.Join(quoted, " "))
