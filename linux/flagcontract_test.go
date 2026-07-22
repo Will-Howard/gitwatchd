@@ -22,7 +22,7 @@ func TestDefaultsForBarePath(t *testing.T) {
 	if spec.Message != "gitwatchd auto-commit (%d)" {
 		t.Errorf("message = %q", spec.Message)
 	}
-	if spec.DateFormat != "%Y-%m-%d %H:%M:%S" {
+	if spec.DateFormat != "+%Y-%m-%d %H:%M:%S" { // upstream's exact default, leading + included
 		t.Errorf("dateFormat = %q", spec.DateFormat)
 	}
 	if spec.Branch != "" || spec.Rebase || spec.Exclude != "" || spec.NoMergeCommit || spec.Paused {
@@ -105,7 +105,7 @@ func TestNoExcludeByDefault(t *testing.T) {
 
 var contractValueFlags = map[string]string{
 	"-s": "2", "-r": "origin", "-b": "main", "-m": "msg",
-	"-d": "%Y", "-x": `\.log$`, "-g": "/tmp/gd",
+	"-d": "+%Y", "-x": `\.log$`, "-g": "/tmp/gd",
 }
 var contractBoolFlags = []string{"-R", "-M", "-f", "--paused"}
 var contractCommands = []string{"add", "rm", "pause", "resume", "status",

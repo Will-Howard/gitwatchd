@@ -177,24 +177,19 @@ func TestParityPlainCommit(t *testing.T) {
 	}
 }
 
-func TestParityOnlyFirstDateTokenExpands(t *testing.T) {
-	// No -d here: upstream hands the -d value to date(1) raw (the user
-	// includes the leading +) while our contract takes a bare strftime
-	// format, so identical argv would mean different formats. The default
-	// timestamps differ between the two runs anyway, so the assertion is on
-	// message shape: a date in the first %d, the second one left literal.
-	model, ours := twins(t, []string{"-m", "cycle %d then %d"}, false, "",
+// Sharp corner, kept for upstream parity: -d passes to date(1) raw and only
+// the first %d is spliced. The year-only format keeps the spliced date
+// identical across the two runs, so the fingerprints compare exactly.
+func TestParitySharpCornerRawDateFormatAndFirstTokenOnly(t *testing.T) {
+	model, ours := twins(t, []string{"-m", "at %d then %d", "-d", "+%Y"}, false, "",
 		func(repo *testRepo, _ *bareRemote) {
 			seed(repo)
 			repo.write("notes.txt", "hello\n")
 		})
-	for name, msg := range map[string]string{"gitwatch": model.lastMessage, "ours": ours.lastMessage} {
-		if !strings.HasPrefix(msg, "cycle 2") || !strings.HasSuffix(msg, " then %d") {
-			t.Errorf("%s: the date splices into the first %%d only, got %q", name, msg)
-		}
-	}
-	model.lastMessage, ours.lastMessage = "", ""
 	expectParity(t, model, ours)
+	if !strings.HasPrefix(ours.lastMessage, "at 2") || !strings.HasSuffix(ours.lastMessage, " then %d") {
+		t.Errorf("got %q", ours.lastMessage)
+	}
 }
 
 func TestParityPushToRemote(t *testing.T) {

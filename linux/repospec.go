@@ -66,7 +66,7 @@ func (s RepoSpec) Excludes(fullPath string) bool {
 func parseRepoSpec(args []string) (*RepoSpec, string) {
 	spec := &RepoSpec{
 		Settle:     2,
-		DateFormat: "%Y-%m-%d %H:%M:%S",
+		DateFormat: "+%Y-%m-%d %H:%M:%S",
 		Message:    "gitwatchd auto-commit (%d)",
 	}
 	target := ""
@@ -176,10 +176,11 @@ func homeDir() string {
 	return h
 }
 
-// Render the current date using gitwatch's strftime-style format via date(1),
-// exactly as upstream does.
+// Render the current date exactly as upstream does: the -d value passes to
+// date(1) verbatim (the user includes the leading +), and a format date(1)
+// rejects yields an empty string.
 func formattedDate(fmt string) string {
-	code, out := runCommand("date", []string{"+" + fmt}, "")
+	code, out := runCommand("date", []string{fmt}, "")
 	if code != 0 {
 		return ""
 	}

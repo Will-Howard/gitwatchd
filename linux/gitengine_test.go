@@ -40,16 +40,28 @@ func TestChangesCommitLocallyWithoutRemote(t *testing.T) {
 func TestCustomMessageAndDateExpansion(t *testing.T) {
 	repo := newTestRepo(t)
 	repo.write("a.txt", "1")
-	autoCommit(repo.spec("-m", "saved on %d", "-d", "%Y"))
+	autoCommit(repo.spec("-m", "saved on %d", "-d", "+%Y"))
 	if !strings.HasPrefix(repo.lastMessage(), "saved on 2") { // "saved on 2026"
 		t.Errorf("got: %s", repo.lastMessage())
+	}
+}
+
+// Sharp corner, kept for upstream parity: -d goes to date(1) raw, so a
+// format without a leading + splices an empty date. Git's commit-message
+// cleanup then trims the trailing whitespace.
+func TestSharpCornerRawDateFormatWithoutPlusSplicesEmptyDate(t *testing.T) {
+	repo := newTestRepo(t)
+	repo.write("a.txt", "1")
+	autoCommit(repo.spec("-m", "at %d", "-d", "%Y"))
+	if repo.lastMessage() != "at" {
+		t.Errorf("got %q, want %q", repo.lastMessage(), "at")
 	}
 }
 
 func TestOnlyTheFirstDateTokenIsExpanded(t *testing.T) {
 	repo := newTestRepo(t)
 	repo.write("a.txt", "1")
-	autoCommit(repo.spec("-m", "saved %d then %d", "-d", "%Y"))
+	autoCommit(repo.spec("-m", "saved %d then %d", "-d", "+%Y"))
 	got := repo.lastMessage()
 	if !strings.HasPrefix(got, "saved 2") || !strings.HasSuffix(got, " then %d") {
 		t.Errorf("upstream splices the date into the first %%d only, got: %s", got)

@@ -444,8 +444,9 @@ FLAGS (for add)
                 when more than one machine pushes to the same branch.
   -m <msg>      Commit message; %d becomes the timestamp.
                 Default: "gitwatchd auto-commit (%d)".
-  -d <fmt>      strftime format for that timestamp (see ` + "`man date`" + `).
-                Default: "%Y-%m-%d %H:%M:%S".
+  -d <fmt>      Format for that timestamp, passed to date(1) as is,
+                so start it with "+" (see ` + "`man date`" + `).
+                Default: "+%Y-%m-%d %H:%M:%S".
   -x <pattern>  Skip changes whose path matches this regular
                 expression (e.g. '\.log$' or 'build/').
   -M            Skip committing while the repo has a merge in progress.
