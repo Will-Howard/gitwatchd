@@ -31,7 +31,7 @@ struct AutoCommitCycle {
     func customMessage() {
         let repo = TestRepo()
         repo.write("a.txt", "1")
-        Git.autoCommit(repo.spec("-m", "saved on %d", "-d", "%Y"))
+        Git.autoCommit(repo.spec("-m", "saved on %d", "-d", "+%Y"))
         #expect(repo.lastMessage.hasPrefix("saved on 2"),   // "saved on 2026"
                 "got: \(repo.lastMessage)")
     }
@@ -40,8 +40,16 @@ struct AutoCommitCycle {
     func firstDateTokenOnly() {
         let repo = TestRepo()
         repo.write("a.txt", "1")
-        Git.autoCommit(repo.spec("-m", "%d then %d", "-d", "%Y"))
+        Git.autoCommit(repo.spec("-m", "%d then %d", "-d", "+%Y"))
         #expect(repo.lastMessage.hasSuffix(" then %d"), "got: \(repo.lastMessage)")
+    }
+
+    @Test("sharp corner, kept for upstream parity: -d goes to date(1) raw, so a format without a leading + splices an empty date")
+    func rawDateFormatNeedsLeadingPlus() {
+        let repo = TestRepo()
+        repo.write("a.txt", "1")
+        Git.autoCommit(repo.spec("-m", "at %d", "-d", "%Y"))
+        #expect(repo.lastMessage == "at", "the empty splice leaves 'at '; git's message cleanup trims it")
     }
 
     @Test("with -r origin the commit is pushed to the remote")

@@ -122,6 +122,17 @@ struct GitwatchParity {
         #expect(r.ours.commitCount == 1)
     }
 
+    @Test("sharp corner, kept for upstream parity: -d passes to date(1) raw and only the first %d is spliced")
+    func rawDateFormatAndFirstTokenOnly() {
+        let r = twins(flags: ["-m", "at %d then %d", "-d", "+%Y"], remote: false) { repo, _ in
+            seed(repo)
+            repo.write("notes.txt", "hello\n")
+        }
+        #expect(r.ours == r.model)
+        #expect(r.ours.lastMessage.hasPrefix("at 2"), "got: \(r.ours.lastMessage)")
+        #expect(r.ours.lastMessage.hasSuffix(" then %d"), "got: \(r.ours.lastMessage)")
+    }
+
     @Test("new changes: same commit, same message, clean tree afterwards")
     func plainCommit() {
         let r = twins(flags: ["-m", "cycle"], remote: false) { repo, _ in

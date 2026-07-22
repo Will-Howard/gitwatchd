@@ -10,7 +10,7 @@ import Foundation
 struct RepoSpec {
     var path: String
     var settle: Double = 2            // -s  debounce seconds
-    var dateFormat: String = "%Y-%m-%d %H:%M:%S"  // -d
+    var dateFormat: String = "+%Y-%m-%d %H:%M:%S"  // -d
     var remote: String? = nil         // -r
     var branch: String? = nil         // -b
     var rebase: Bool = false          // -R  pull --rebase before push
@@ -97,9 +97,10 @@ enum RepoSpecParser {
         return (spec, nil)
     }
 
-    /// Render the current date using gitwatch's strftime-style format via /bin/date.
+    /// The -d value goes to date(1) verbatim, as upstream: formats need a
+    /// leading "+", and a bad format splices an empty string.
     static func formattedDate(_ fmt: String) -> String {
-        let r = runProcess("/bin/date", ["+\(fmt)"])
+        let r = runProcess("/bin/date", [fmt])
         return r.code == 0 ? r.out : ""
     }
 }

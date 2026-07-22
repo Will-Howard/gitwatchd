@@ -13,7 +13,7 @@ struct FlagDefaults {
         #expect(spec.settle == 2)                                // -s "Default: 2"
         #expect(spec.remote == nil)                              // -r "Default: no push"
         #expect(spec.message == "gitwatchd auto-commit (%d)")    // -m default
-        #expect(spec.dateFormat == "%Y-%m-%d %H:%M:%S")          // -d default
+        #expect(spec.dateFormat == "+%Y-%m-%d %H:%M:%S")         // -d default
         #expect(spec.branch == nil)
         #expect(spec.rebase == false)
         #expect(spec.exclude == nil)
