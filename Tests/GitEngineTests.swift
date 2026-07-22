@@ -36,6 +36,14 @@ struct AutoCommitCycle {
                 "got: \(repo.lastMessage)")
     }
 
+    @Test("only the first %d is expanded, as upstream does")
+    func firstDateTokenOnly() {
+        let repo = TestRepo()
+        repo.write("a.txt", "1")
+        Git.autoCommit(repo.spec("-m", "%d then %d", "-d", "%Y"))
+        #expect(repo.lastMessage.hasSuffix(" then %d"), "got: \(repo.lastMessage)")
+    }
+
     @Test("with -r origin the commit is pushed to the remote")
     func pushToRemote() {
         let repo = TestRepo()

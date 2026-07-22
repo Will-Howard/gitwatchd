@@ -123,8 +123,11 @@ enum Git {
         // or just the file for a file target.
         let addTarget = spec.isFileTarget ? spec.path : "."
         run(["add", "--all", addTarget], in: dir, gitDir: spec.gitDir)
-        let msg = spec.message.replacingOccurrences(
-            of: "%d", with: RepoSpecParser.formattedDate(spec.dateFormat))
+        // Upstream splices the date into the first %d only (bash ${msg/\%d/...}).
+        var msg = spec.message
+        if let r = msg.range(of: "%d") {
+            msg.replaceSubrange(r, with: RepoSpecParser.formattedDate(spec.dateFormat))
+        }
         let commit = run(["commit", "-m", msg], in: dir, gitDir: spec.gitDir)
         guard commit.code == 0 else {
             // Repo-wide changes outside the watched subtree stage nothing.
