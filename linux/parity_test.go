@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -174,6 +175,26 @@ func TestParityPlainCommit(t *testing.T) {
 	if ours.commitCount != 2 || ours.lastMessage != "cycle" || ours.pendingChanges != 0 {
 		t.Errorf("same commit, same message, clean tree afterwards: %v", ours)
 	}
+}
+
+func TestParityOnlyFirstDateTokenExpands(t *testing.T) {
+	// No -d here: upstream hands the -d value to date(1) raw (the user
+	// includes the leading +) while our contract takes a bare strftime
+	// format, so identical argv would mean different formats. The default
+	// timestamps differ between the two runs anyway, so the assertion is on
+	// message shape: a date in the first %d, the second one left literal.
+	model, ours := twins(t, []string{"-m", "cycle %d then %d"}, false, "",
+		func(repo *testRepo, _ *bareRemote) {
+			seed(repo)
+			repo.write("notes.txt", "hello\n")
+		})
+	for name, msg := range map[string]string{"gitwatch": model.lastMessage, "ours": ours.lastMessage} {
+		if !strings.HasPrefix(msg, "cycle 2") || !strings.HasSuffix(msg, " then %d") {
+			t.Errorf("%s: the date splices into the first %%d only, got %q", name, msg)
+		}
+	}
+	model.lastMessage, ours.lastMessage = "", ""
+	expectParity(t, model, ours)
 }
 
 func TestParityPushToRemote(t *testing.T) {

@@ -144,7 +144,8 @@ func autoCommit(spec *RepoSpec) Outcome {
 		addTarget = spec.Path
 	}
 	gitRun([]string{"add", "--all", addTarget}, dir, spec.GitDir)
-	msg := strings.ReplaceAll(spec.Message, "%d", formattedDate(spec.DateFormat))
+	// Upstream's ${COMMITMSG/\%d/...}: the date splices into the first %d only.
+	msg := strings.Replace(spec.Message, "%d", formattedDate(spec.DateFormat), 1)
 	code, out := gitRun([]string{"commit", "-m", msg}, dir, spec.GitDir)
 	if code != 0 {
 		// Repo-wide changes outside the watched subtree stage nothing.

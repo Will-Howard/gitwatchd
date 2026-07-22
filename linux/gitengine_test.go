@@ -46,6 +46,16 @@ func TestCustomMessageAndDateExpansion(t *testing.T) {
 	}
 }
 
+func TestOnlyTheFirstDateTokenIsExpanded(t *testing.T) {
+	repo := newTestRepo(t)
+	repo.write("a.txt", "1")
+	autoCommit(repo.spec("-m", "saved %d then %d", "-d", "%Y"))
+	got := repo.lastMessage()
+	if !strings.HasPrefix(got, "saved 2") || !strings.HasSuffix(got, " then %d") {
+		t.Errorf("upstream splices the date into the first %%d only, got: %s", got)
+	}
+}
+
 func TestPushToRemote(t *testing.T) {
 	repo := newTestRepo(t)
 	origin := repo.addOrigin()
