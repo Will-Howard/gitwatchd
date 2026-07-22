@@ -72,11 +72,10 @@ func TestWatcherSeesNewSubdirectories(t *testing.T) {
 	repo := newTestRepo(t)
 	startWatcher(t, repo.spec("-s", "0.2"))
 	os.MkdirAll(filepath.Join(repo.path, "fresh", "deep"), 0o755)
-	waitFor(t, 10*time.Second, "the first commit", func() bool { return repo.commitCount() >= 1 })
-	before := repo.commitCount()
+	time.Sleep(500 * time.Millisecond) // let the new subtree's watches land
 	repo.write("fresh/deep/inner.txt", "made inside a new directory\n")
 	waitFor(t, 10*time.Second, "a commit from inside the new subtree", func() bool {
-		return repo.commitCount() > before && pendingCount(repo.path, "") == 0
+		return repo.commitCount() == 1 && pendingCount(repo.path, "") == 0
 	})
 }
 
