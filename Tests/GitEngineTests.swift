@@ -1,6 +1,23 @@
 import Foundation
 import Testing
 
+/// The commit subject read without the whitespace-trimming the test helpers
+/// apply, so a test can assert edge whitespace that would otherwise be erased.
+private func rawCommitSubject(_ repo: TestRepo) -> String {
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: GitRuntime.resolved.gitPath)
+    p.arguments = ["log", "-1", "--pretty=%s"]
+    p.currentDirectoryURL = URL(fileURLWithPath: repo.path)
+    let out = Pipe()
+    p.standardOutput = out
+    try! p.run()
+    let d = out.fileHandleForReading.readDataToEndOfFile()
+    p.waitUntilExit()
+    var s = String(decoding: d, as: UTF8.self)
+    while s.hasSuffix("\n") { s.removeLast() }
+    return s
+}
+
 // Engine tests drive Git.autoCommit / Git.push against real throwaway git
 // repos, asserting both the reported outcome and the repo state left behind
 // (the gitwatch parity contract: same commands, same end state).
@@ -62,6 +79,99 @@ struct AutoCommitCycle {
     }
 }
 
+// -c runs a command and uses its stdout as the commit message; -C additionally
+// pipes `git diff --name-only` into its stdin. Upstream executes the command
+// with bare word-splitting, not a shell, and never checks whether it failed.
+@Suite("Commit message command (-c / -C)")
+struct CommitMessageCommand {
+
+    @Test("-c: the command's stdout becomes the commit message, overriding -m and -d")
+    func stdoutBecomesMessage() {
+        let repo = TestRepo()
+        repo.write("a.txt", "1")
+        #expect(Git.autoCommit(repo.spec("-m", "fallback %d", "-d", "+%Y",
+                                         "-c", "echo checkpoint")) == .committed)
+        #expect(repo.lastMessage == "checkpoint", "got: \(repo.lastMessage)")
+    }
+
+    @Test("the command is an argv, not a shell line: operators ride along as plain words")
+    func noShellOperators() {
+        let repo = TestRepo()
+        repo.write("a.txt", "1")
+        Git.autoCommit(repo.spec("-c", "echo x && echo y"))
+        #expect(repo.lastMessage == "x && echo y", "got: \(repo.lastMessage)")
+    }
+
+    @Test("the command runs in the repo's work dir")
+    func runsInWorkDir() {
+        let repo = TestRepo()
+        repo.write("msg-src.txt", "from the work dir\n")
+        Git.autoCommit(repo.spec("-c", "cat msg-src.txt"))
+        #expect(repo.lastMessage == "from the work dir", "got: \(repo.lastMessage)")
+    }
+
+    @Test("-C: the changed file names arrive on the command's stdin")
+    func pipesChangedFiles() {
+        let repo = TestRepo()
+        repo.write("tracked.txt", "v1\n")
+        Git.autoCommit(repo.spec())
+        repo.write("tracked.txt", "v2\n")
+        Git.autoCommit(repo.spec("-c", "cat", "-C"))
+        #expect(repo.lastMessage == "tracked.txt", "got: \(repo.lastMessage)")
+    }
+
+    @Test("-C feeds the name list raw: a leading-space filename is not edge-trimmed")
+    func pipedNamesKeepLeadingSpace() {
+        let repo = TestRepo()
+        repo.write(" lead.txt", "v1\n")
+        repo.git("add", "-A"); repo.git("commit", "-q", "-m", "seed")
+        repo.write(" lead.txt", "v2\n")
+        #expect(Git.autoCommit(repo.spec("-c", "cat", "-C")) == .committed)
+        // The helpers trim; read the subject raw to prove the leading space survived.
+        #expect(rawCommitSubject(repo) == " lead.txt",
+                "got: \(rawCommitSubject(repo).debugDescription)")
+    }
+
+    @Test("-C without -c changes nothing")
+    func pipeAloneIsInert() {
+        let repo = TestRepo()
+        repo.write("a.txt", "1")
+        #expect(Git.autoCommit(repo.spec("-C", "-m", "plain")) == .committed)
+        #expect(repo.lastMessage == "plain")
+    }
+
+    @Test("an empty -c falls back to the standard message")
+    func emptyCommandFallsBack() {
+        let repo = TestRepo()
+        repo.write("a.txt", "1")
+        Git.autoCommit(repo.spec("-c", "", "-m", "fallback"))
+        #expect(repo.lastMessage == "fallback")
+    }
+
+    @Test("a failing command is fire-and-forget: its stdout is still the message")
+    func failingCommandStillUsed() {
+        let repo = TestRepo()
+        repo.write("gen.sh", "#!/bin/sh\necho generated then failed\nexit 7\n")
+        try! FileManager.default.setAttributes([.posixPermissions: 0o755],
+                                               ofItemAtPath: repo.path + "/gen.sh")
+        repo.write("a.txt", "1")
+        #expect(Git.autoCommit(repo.spec("-c", "./gen.sh")) == .committed)
+        #expect(repo.lastMessage == "generated then failed", "got: \(repo.lastMessage)")
+    }
+
+    @Test("-c output that is not valid UTF-8 still commits: lossy decode, not an empty-message abort")
+    func nonUtf8OutputStillCommits() {
+        let repo = TestRepo()
+        repo.write("bad.sh", "#!/bin/sh\nprintf '\\377'\n")   // 0xFF: not valid UTF-8
+        try! FileManager.default.setAttributes([.posixPermissions: 0o755],
+                                               ofItemAtPath: repo.path + "/bad.sh")
+        repo.write("a.txt", "1")
+        #expect(Git.autoCommit(repo.spec("-c", "./bad.sh")) == .committed)
+        #expect(repo.commitCount == 1, "the commit happened rather than aborting on an empty message")
+        #expect(!repo.lastMessage.isEmpty, "lossy decode leaves U+FFFD, so the message is non-empty")
+    }
+}
+
 @Suite("Push failures")
 struct PushFailures {
 
@@ -105,6 +215,23 @@ struct PushFailures {
             return
         }
         #expect(!repo.midRebase, "no rebase was ever started, so the retry loop may heal this")
+    }
+
+    @Test("this cycle's commit fails but an earlier commit still pushes; the failure is still surfaced")
+    func commitFailsButPushProceeds() {
+        let repo = TestRepo()
+        let origin = repo.addOrigin()
+        repo.write("seed.txt", "v1\n")
+        Git.autoCommit(repo.spec("-r", "origin", "-b", "main"))       // seed committed and pushed
+        repo.commit("stranded.txt", "local only\n", message: "stranded")  // local, never pushed
+        repo.write("seed.txt", "changed\n")                          // dirty for this cycle
+        let outcome = Git.autoCommit(repo.spec("-c", "true", "-r", "origin", "-b", "main"))
+        guard case .commitFailed = outcome else {
+            Issue.record("expected commitFailed, got \(outcome)")
+            return
+        }
+        #expect(origin.commitCount == 2, "seed + stranded both reached the remote despite the aborted commit")
+        #expect(origin.lastMessage == "stranded")
     }
 
     @Test("retrying with nothing left to push still reports pushed")

@@ -326,6 +326,10 @@ final class FileWatcher {
 
 // MARK: - Entry point: choose CLI vs GUI
 
+// A -c/-C message command that closes its stdin early must not fell the daemon
+// with SIGPIPE; a broken pipe surfaces as a write error we tolerate instead.
+signal(SIGPIPE, SIG_IGN)
+
 let userArgs = Array(CommandLine.arguments.dropFirst()).filter { !$0.hasPrefix("-psn_") }
 let launchedAsApp = Bundle.main.bundlePath.hasSuffix(".app")
 

@@ -17,6 +17,7 @@ import Testing
 struct RepoState: Equatable, CustomStringConvertible {
     var commitCount: Int
     var lastMessage: String
+    var lastMessageBody: String       // multi-line for -l/-L, else == lastMessage
     var pendingChanges: Int
     var branch: String
     var midMerge: Bool
@@ -27,6 +28,7 @@ struct RepoState: Equatable, CustomStringConvertible {
     static func of(_ repo: TestRepo, remote: BareRemote?) -> RepoState {
         RepoState(commitCount: repo.commitCount,
                   lastMessage: repo.lastMessage,
+                  lastMessageBody: repo.lastMessageBody,
                   pendingChanges: Git.pendingCount(repo.path),
                   branch: Git.currentBranch(repo.path),
                   midMerge: repo.midMerge,
@@ -36,7 +38,7 @@ struct RepoState: Equatable, CustomStringConvertible {
     }
 
     var description: String {
-        "commits=\(commitCount) last=\"\(lastMessage)\" pending=\(pendingChanges) "
+        "commits=\(commitCount) last=\"\(lastMessage)\" body=\"\(lastMessageBody)\" pending=\(pendingChanges) "
             + "branch=\(branch) midMerge=\(midMerge) midRebase=\(midRebase) "
             + "remote(commits=\(remoteCommitCount) last=\"\(remoteLastMessage)\")"
     }
@@ -112,6 +114,33 @@ private func colleaguePushes(_ remote: BareRemote, file: String, message: String
     colleague.git("push", "-q", "origin", "main")
 }
 
+/// Commit many long-named files, then dirty them all, so `git diff --name-only`
+/// emits well over a pipe buffer's worth of names (here ~140KB). Enough that a
+/// command which does not drain its stdin either takes a broken pipe or blocks.
+private func manyChangedFiles(_ repo: TestRepo, count: Int = 700) {
+    let pad = String(repeating: "x", count: 200)
+    for i in 0..<count { repo.write("f\(i)_\(pad).txt", "v1\n") }
+    repo.git("add", "-A")
+    repo.git("commit", "-q", "-m", "seed")
+    for i in 0..<count { repo.write("f\(i)_\(pad).txt", "v2\n") }
+}
+
+/// Make `git diff --name-only` write a warning to stderr (LF/CRLF renormalize)
+/// while listing one file on stdout, to prove only stdout feeds the command.
+private func crlfWarningSetup(_ repo: TestRepo) {
+    repo.git("config", "core.autocrlf", "true")
+    repo.write("f.txt", "a\nb\n")
+    repo.git("-c", "core.autocrlf=false", "add", "f.txt")
+    repo.git("-c", "core.autocrlf=false", "commit", "-q", "-m", "seed")
+    repo.write("f.txt", "a\nb\nc\n")
+}
+
+private func makeExecutable(_ repo: TestRepo, _ file: String, _ body: String) {
+    repo.write(file, body)
+    try! FileManager.default.setAttributes([.posixPermissions: 0o755],
+                                           ofItemAtPath: repo.path + "/" + file)
+}
+
 @Suite("Parity with upstream gitwatch")
 struct GitwatchParity {
 
@@ -143,6 +172,118 @@ struct GitwatchParity {
         #expect(r.ours.commitCount == 2)
         #expect(r.ours.lastMessage == "cycle")
         #expect(r.ours.pendingChanges == 0)
+    }
+
+    @Test("-c: the command's stdout is the commit message on both sides")
+    func messageCommand() {
+        let r = twins(flags: ["-m", "fallback", "-c", "echo checkpoint"], remote: false) { repo, _ in
+            seed(repo)
+            repo.write("notes.txt", "hello\n")
+        }
+        #expect(r.model.lastMessage == "checkpoint", "green today: the model's behaviour, pinned directly")
+        #expect(r.ours == r.model)
+        #expect(r.ours.lastMessage == "checkpoint")
+    }
+
+    @Test("-c beats -l when both are given: the command's output is the message")
+    func messageCommandBeatsListChanges() {
+        let r = twins(flags: ["-m", "fallback", "-l", "0", "-c", "echo checkpoint"], remote: false) { repo, _ in
+            seed(repo)
+            repo.write("notes.txt", "hello\n")
+        }
+        #expect(r.model.lastMessage == "checkpoint")
+        #expect(r.ours == r.model)
+        #expect(r.ours.lastMessage == "checkpoint")
+    }
+
+    @Test("sharp corner, kept for upstream parity: -c word-splits an argv, shell operators are ordinary words")
+    func messageCommandIsNotAShell() {
+        let r = twins(flags: ["-m", "fallback", "-c", "echo x && echo y"], remote: false) { repo, _ in
+            seed(repo)
+            repo.write("notes.txt", "hello\n")
+        }
+        #expect(r.model.lastMessage == "x && echo y", "green today: one echo of plain words, not two commands")
+        #expect(r.ours == r.model)
+        #expect(r.ours.lastMessage == "x && echo y")
+    }
+
+    // The model's getopts declares C: and throws its argument away, so upstream
+    // needs a throwaway token after -C; our -C takes none, and the extra
+    // bareword is not the final target, so both sides ignore "unused".
+    @Test("-c with -C: both pipe the changed file names into the command")
+    func messageCommandReceivesDiffNames() {
+        let r = twins(flags: ["-m", "fallback", "-c", "cat", "-C", "unused"], remote: false) { repo, _ in
+            seed(repo)
+            repo.write("seed.txt", "changed\n")
+        }
+        #expect(r.model.lastMessage == "seed.txt", "green today: the model pipes the diff names")
+        #expect(r.ours == r.model)
+        #expect(r.ours.lastMessage == "seed.txt")
+    }
+
+    @Test("-C piping a huge name list to a command that never reads stdin: no crash, same result")
+    func hugePipeNonDrainingCommand() {
+        let r = twins(flags: ["-m", "fallback", "-c", "echo done", "-C", "unused"], remote: false) { repo, _ in
+            manyChangedFiles(repo)
+        }
+        #expect(r.ours == r.model)
+        #expect(r.ours.lastMessage == "done", "the command's own stdout is the message")
+    }
+
+    @Test("-C piping a huge name list to cat: no deadlock, same result")
+    func hugePipeCat() {
+        let r = twins(flags: ["-m", "fallback", "-c", "cat", "-C", "unused"], remote: false) { repo, _ in
+            manyChangedFiles(repo)
+        }
+        #expect(r.ours == r.model)
+    }
+
+    @Test("-c output with a NUL byte: both drop the NUL and commit the rest")
+    func nulByteInMessage() {
+        let r = twins(flags: ["-m", "fallback", "-c", "./nul.sh"], remote: false) { repo, _ in
+            seed(repo)
+            makeExecutable(repo, "nul.sh", "#!/bin/sh\nprintf 'before\\0after'\n")
+            repo.write("notes.txt", "hello\n")
+        }
+        #expect(r.model.lastMessage == "beforeafter", "green today: bash's substitution drops the NUL")
+        #expect(r.ours == r.model)
+        #expect(r.ours.lastMessage == "beforeafter")
+    }
+
+    @Test("-C under core.autocrlf: git's stderr warning does not enter the message")
+    func crlfWarningStaysOutOfMessage() {
+        let r = twins(flags: ["-m", "fallback", "-c", "cat", "-C", "unused"], remote: false) { repo, _ in
+            crlfWarningSetup(repo)
+        }
+        #expect(r.model.lastMessage == "f.txt", "green today: only stdout feeds the command")
+        #expect(r.ours == r.model)
+        #expect(r.ours.lastMessage == "f.txt")
+        #expect(!r.ours.lastMessage.contains("warning"), "the LF/CRLF warning must not become the message")
+    }
+
+    @Test("push runs even when this cycle's commit aborts: an earlier stranded commit still reaches the remote")
+    func pushAfterAbortedCommit() {
+        let r = twins(flags: ["-m", "fallback", "-c", "true", "-r", "origin", "-b", "main"], remote: true) { repo, _ in
+            seedAndPush(repo)
+            repo.commit("stranded.txt", "local only\n", message: "stranded")
+            repo.write("seed.txt", "changed\n")
+        }
+        #expect(r.ours == r.model)
+        #expect(r.ours.remoteCommitCount == 2, "seed plus the stranded commit both on the remote")
+        #expect(r.ours.remoteLastMessage == "stranded")
+    }
+
+    @Test("-C with only new files: nothing on stdin, the empty message aborts the commit on both")
+    func emptyPipeAbortsCommit() {
+        let r = twins(flags: ["-m", "fallback", "-c", "cat", "-C", "unused"], remote: false) { repo, _ in
+            seed(repo)
+            repo.write("new.txt", "hello\n")
+        }
+        #expect(r.model.commitCount == 1, "green today: the model's empty message aborts its commit")
+        #expect(r.model.pendingChanges == 1, "green today: the model leaves the change staged")
+        #expect(r.ours == r.model)
+        #expect(r.ours.commitCount == 1, "fire-and-forget: no commit, no crash, on either side")
+        #expect(r.ours.pendingChanges == 1, "the change stays staged for a later cycle")
     }
 
     @Test("with a remote: both push the commit")
@@ -221,6 +362,54 @@ struct GitwatchParity {
         #expect(r.ours == r.model)
         #expect(r.ours.commitCount == 2)
         #expect(r.ours.pendingChanges == 1, "b.txt stays uncommitted on both sides")
+    }
+
+    @Test("-l: both embed the coloured diff as the commit message, byte for byte")
+    func listChangesColoured() {
+        let r = twins(flags: ["-m", "cycle", "-l", "10"], remote: false) { repo, _ in
+            seed(repo)
+            repo.write("seed.txt", "changed\n")
+        }
+        #expect(r.model.lastMessageBody.contains("seed.txt:1: "),
+                "model sanity: hunk lines become path:line:, got \(r.model.lastMessageBody)")
+        #expect(r.model.lastMessageBody.contains("\u{1B}["),
+                "model sanity: -l embeds raw ANSI colour codes")
+        // Byte-exact comparison is fair here: both worlds run the same git, so
+        // the colour bytes (which vary across git versions/config) cancel out.
+        #expect(r.ours == r.model)
+    }
+
+    @Test("-l with CRLF content: both embed identical bytes, the trailing CR kept")
+    func listChangesCRLF() {
+        let r = twins(flags: ["-m", "cycle", "-l", "10"], remote: false) { repo, _ in
+            repo.write("crlf.txt", "alpha\r\nbeta\r\ngamma\r\n")
+            repo.git("add", "-A")
+            repo.git("commit", "-q", "-m", "seed")
+            repo.write("crlf.txt", "alpha\r\nCHANGED\r\ngamma\r\n")
+        }
+        #expect(r.model.lastMessageBody.contains("crlf.txt:2: "),
+                "model sanity: CRLF lines still carry path:line:, got \(r.model.lastMessageBody)")
+        #expect(r.model.lastMessageBody.contains("\r"),
+                "model sanity: the diff-line content keeps the file's trailing CR")
+        #expect(r.ours == r.model)
+    }
+
+    @Test("-L, pinned bug-for-bug: both degrade every message to the status summary")
+    func listChangesPlainDegraded() {
+        // Upstream -L blanks the colour variable, so the script runs
+        // `git diff -U0 ""`; git 2.39+ rejects the empty argument, the diff
+        // message comes back empty, and every -L commit falls through to
+        // "New files added: <git status -s>" (status taken before git add).
+        // NOT the documented diff-as-message behaviour: strict parity keeps
+        // the bug, and the model assertion pins the real script's output
+        // today, independent of our engine.
+        let r = twins(flags: ["-m", "cycle", "-L", "10"], remote: false) { repo, _ in
+            seed(repo)
+            repo.write("seed.txt", "changed\n")
+        }
+        #expect(r.model.lastMessageBody == "New files added:  M seed.txt",
+                "upstream degradation changed? got: \(r.model.lastMessageBody)")
+        #expect(r.ours == r.model)
     }
 
     @Test("-R conflict: both leave the rebase in progress for the user")

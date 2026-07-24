@@ -60,6 +60,7 @@ final class TestRepo {
 
     var commitCount: Int { Int(git("rev-list", "--count", "HEAD")) ?? 0 }
     var lastMessage: String { git("log", "-1", "--pretty=%s") }
+    var lastMessageBody: String { git("log", "-1", "--pretty=%B") }
     var midMerge: Bool { FileManager.default.fileExists(atPath: path + "/.git/MERGE_HEAD") }
     var midRebase: Bool {
         FileManager.default.fileExists(atPath: path + "/.git/rebase-merge")

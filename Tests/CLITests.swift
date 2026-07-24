@@ -177,8 +177,9 @@ struct CLIContract {
 struct HelpSync {
 
     static let valueFlags = ["-s": "2", "-r": "origin", "-b": "main", "-m": "msg",
-                             "-d": "%Y", "-x": "\\.log$", "-g": "/tmp/gd"]
-    static let boolFlags = ["-R", "-M", "-f", "--paused"]
+                             "-d": "%Y", "-c": "echo msg", "-l": "10", "-L": "10",
+                             "-x": "\\.log$", "-g": "/tmp/gd"]
+    static let boolFlags = ["-R", "-M", "-C", "-f", "--paused"]
     static let commands = ["add", "rm", "pause", "resume", "status",
                            "start", "stop", "autostart", "config", "help", "version"]
 

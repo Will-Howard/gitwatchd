@@ -305,6 +305,16 @@ enum CLI {
                         Default: "gitwatchd auto-commit (%d)".
           -d <fmt>      Format string for that timestamp (see `man date`).
                         Default: "+%Y-%m-%d %H:%M:%S".
+          -l <lines>    Use the diff itself as the commit message (file:line: change,
+                        in colour), up to <lines> lines (0 = no limit). A diff
+                        longer than <lines> falls back to the `git diff --stat`
+                        summary. Overrides -m.
+          -L <lines>    Same as -l, without colour. Known bug: on git versions > 2.39
+                        this falls back to a status summary.
+          -c <command>  Run <command> and use its output as the commit message.
+                        Overrides -m and -d.
+          -C            Pipe the changed file names into the -c command's stdin.
+                        Requires -c flag, e.g. `gitwatchd -c 'xargs echo updated:' -C .`
           -x <pattern>  Skip changes whose path matches this regular
                         expression (e.g. '\\.log$' or 'build/').
           -M            Skip committing while the repo has a merge in progress.

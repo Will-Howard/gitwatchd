@@ -60,6 +60,10 @@ func runProcess(_ exe: String, _ args: [String], env: [String: String]? = nil,
 }
 
 enum Git {
+    /// A broken pipe from a -c/-C message command must never take the daemon
+    /// down. Set once, the first time the engine runs.
+    private static let sigpipeIgnored: Void = { signal(SIGPIPE, SIG_IGN) }()
+
     @discardableResult
     static func run(_ args: [String], in dir: String, gitDir: String? = nil) -> (code: Int32, out: String) {
         var full = args
@@ -102,6 +106,98 @@ enum Git {
         }
     }
 
+    /// Upstream's `$(...)` capture: stdout only (stderr passes through to the
+    /// terminal there; discarded here), trailing newlines stripped, leading
+    /// whitespace kept (`git status -s` lines start with a space).
+    private static func capture(_ args: [String], in dir: String, gitDir: String?) -> String {
+        var full = args
+        if let gitDir { full = ["--work-tree", dir, "--git-dir", gitDir] + args }
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: GitRuntime.resolved.gitPath)
+        p.arguments = full
+        p.environment = GitRuntime.resolved.env
+        p.currentDirectoryURL = URL(fileURLWithPath: dir)
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        p.standardError = FileHandle.nullDevice
+        do { try p.run() } catch { return "" }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        var out = String(decoding: data, as: UTF8.self)
+        while out.hasSuffix("\n") { out.removeLast() }
+        return out
+    }
+
+    private static let diffMinusFile = try! NSRegularExpression(pattern: "--- (a/)?([^ \\t\\x{1B}]+)")
+    private static let diffPlusFile = try! NSRegularExpression(pattern: "\\+\\+\\+ (b/)?([^ \\t\\x{1B}]+)")
+    private static let diffHunk = try! NSRegularExpression(
+        pattern: "@@ -[0-9]+(,[0-9]+)? \\+([0-9]+)(,[0-9]+)? @@")
+    private static let diffContent = try! NSRegularExpression(pattern: "^(\\x{1B}\\[[0-9;]+m)*([ +-])")
+
+    private static func group2(_ re: NSRegularExpression, _ s: String) -> String? {
+        guard let m = re.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)),
+              let r = Range(m.range(at: 2), in: s) else { return nil }
+        return String(s[r])
+    }
+
+    /// Port of upstream's diff-lines: rewrites `git diff -U0` hunk lines as
+    /// "path:line: content". Its quirks are the contract: unanchored file/hunk
+    /// matches, the removal line number never advancing, a bare 150-character
+    /// cut that counts colour escapes, and "" for path/line before the first
+    /// header.
+    private static func diffLines(_ diff: String) -> String {
+        var path = ""
+        var line = ""
+        var previousPath = ""
+        var out: [String] = []
+        for raw in diff.unicodeScalars.split(separator: "\n" as Unicode.Scalar,
+                                             omittingEmptySubsequences: false) {
+            var reply = String(String.UnicodeScalarView(raw))
+            if let m = group2(diffMinusFile, reply) {
+                previousPath = m
+                continue
+            } else if let m = group2(diffPlusFile, reply) {
+                path = m
+            } else if let m = group2(diffHunk, reply) {
+                line = m
+            } else if let sign = group2(diffContent, reply) {
+                let scalars = reply.unicodeScalars
+                if let cut = scalars.index(scalars.startIndex, offsetBy: 150,
+                                           limitedBy: scalars.endIndex), cut != scalars.endIndex {
+                    reply = String(scalars[..<cut])
+                }
+                if path == "/dev/null" {
+                    out.append("File \(previousPath) deleted or moved.")
+                    continue
+                }
+                out.append("\(path):\(line): \(reply)")
+                if sign != "-" { line = String((Int(line) ?? 0) + 1) }
+            }
+        }
+        return out.joined(separator: "\n")
+    }
+
+    /// Upstream's -l/-L message. The colour argument is passed verbatim, empty
+    /// string included: -L makes the script run `git diff -U0 ""`, which
+    /// modern git rejects, so the diff comes back empty and every -L commit
+    /// falls into the New-files branch. Bug-for-bug: same argv, same outcome
+    /// on whatever git is installed.
+    private static func listChangesMessage(_ spec: RepoSpec) -> String {
+        let dir = spec.workDir
+        let colorArg = spec.listChangesColor ? "--color=always" : ""
+        let msg = diffLines(capture(["diff", "-U0", colorArg], in: dir, gitDir: spec.gitDir))
+        let length = spec.listChanges >= 1 && !msg.isEmpty
+            ? msg.components(separatedBy: "\n").count : 0
+        if length <= spec.listChanges {
+            if !msg.isEmpty { return msg }
+            return "New files added: " + capture(["status", "-s"], in: dir, gitDir: spec.gitDir)
+        }
+        return capture(["diff", "--stat"], in: dir, gitDir: spec.gitDir)
+            .components(separatedBy: "\n")
+            .filter { $0.contains("|") }
+            .joined(separator: "\n")
+    }
+
     /// gitwatch's is_merging: MERGE_HEAD only (a rebase does not count, upstream).
     private static func hasMergeInProgress(_ dir: String, gitDir: String?) -> Bool {
         gitStateExists(["MERGE_HEAD"], in: dir, gitDir: gitDir)
@@ -115,31 +211,130 @@ enum Git {
     /// and push (-r/-b). One gitwatch cycle.
     @discardableResult
     static func autoCommit(_ spec: RepoSpec) -> CommitOutcome {
+        _ = sigpipeIgnored
         let dir = spec.workDir
         if spec.noMergeCommit && hasMergeInProgress(dir, gitDir: spec.gitDir) { return .skippedMerge }
         guard pendingCount(dir, gitDir: spec.gitDir) > 0 else { return .clean }
 
-        // Upstream's GIT_ADD_ARGS: "--all ." scoped to the target directory,
-        // or just the file for a file target.
-        let addTarget = spec.isFileTarget ? spec.path : "."
-        run(["add", "--all", addTarget], in: dir, gitDir: spec.gitDir)
-        // Upstream splices the date into the first %d only (bash ${msg/\%d/...}).
+        // Upstream builds the message before git add (-C's `git diff --name-only`
+        // must see the unstaged tree): the first %d splices, then -l/-L, then
+        // -c/-C, which is upstream's precedence.
         var msg = spec.message
         if let r = msg.range(of: "%d") {
             msg.replaceSubrange(r, with: RepoSpecParser.formattedDate(spec.dateFormat))
         }
-        let commit = run(["commit", "-m", msg], in: dir, gitDir: spec.gitDir)
-        guard commit.code == 0 else {
-            // Repo-wide changes outside the watched subtree stage nothing.
-            if commit.out.contains("nothing to commit")
-                || commit.out.contains("nothing added to commit")
-                || commit.out.contains("no changes added to commit") {
-                return .clean
-            }
-            return .commitFailed(detail: errorSummary(commit.out))
+        if spec.listChanges >= 0 { msg = listChangesMessage(spec) }
+        if let command = spec.commitCommand, !command.isEmpty {
+            msg = commitCommandOutput(command, spec: spec)
         }
-        guard spec.remote != nil else { return .committed }
-        return push(spec)
+        // Upstream's GIT_ADD_ARGS: "--all ." scoped to the target directory,
+        // or just the file for a file target.
+        let addTarget = spec.isFileTarget ? spec.path : "."
+        run(["add", "--all", addTarget], in: dir, gitDir: spec.gitDir)
+        let commit = run(["commit", "-m", msg], in: dir, gitDir: spec.gitDir)
+
+        // gitwatch runs the pull (-R) and push unconditionally after the
+        // commit, whether or not it succeeded. commitOutcome is reporting only.
+        let commitOutcome: CommitOutcome
+        if commit.code == 0 {
+            commitOutcome = .committed
+        } else if commit.out.contains("nothing to commit")
+            || commit.out.contains("nothing added to commit")
+            || commit.out.contains("no changes added to commit") {
+            commitOutcome = .clean
+        } else {
+            commitOutcome = .commitFailed(detail: errorSummary(commit.out))
+        }
+
+        // No remote: never call push(), whose no-remote return would mask a
+        // commit failure.
+        guard spec.remote != nil else { return commitOutcome }
+        let pushed = push(spec)
+        if case .commitFailed = commitOutcome { return commitOutcome }
+        return pushed
+    }
+
+    /// The -c commit command, upstream's bare `$($COMMITCMD)`: word-split into
+    /// an argv and exec'd directly (no shell, so operators like && are plain
+    /// words), stdout captured with trailing newlines stripped as command
+    /// substitution does, exit status ignored. With -C, the unstaged
+    /// `git diff --name-only` output (stdout only) is fed to its stdin.
+    private static func commitCommandOutput(_ command: String, spec: RepoSpec) -> String {
+        let argv = command.split(whereSeparator: { $0 == " " || $0 == "\t" || $0 == "\n" })
+            .map(String.init)
+        guard !argv.isEmpty else { return "" }
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        p.arguments = argv
+        p.environment = GitRuntime.resolved.env
+        p.currentDirectoryURL = URL(fileURLWithPath: spec.workDir)
+        let out = Pipe()
+        p.standardOutput = out
+        var feedHandle: FileHandle? = nil
+        var feedData = Data()
+        if spec.pipeChangedFiles {
+            feedData = diffNameOnlyStdout(spec)
+            let pipe = Pipe()
+            p.standardInput = pipe
+            feedHandle = pipe.fileHandleForWriting
+        } else {
+            p.standardInput = FileHandle.nullDevice
+        }
+        do { try p.run() } catch { return "" }
+
+        // Feed stdin from a background thread while we drain stdout here, so a
+        // command that never reads (or one like cat with a payload past the
+        // pipe buffer) can neither deadlock the repo queue nor, with SIGPIPE
+        // ignored, crash on a broken pipe.
+        let fed = DispatchSemaphore(value: 0)
+        if let feedHandle {
+            DispatchQueue.global().async {
+                let fd = feedHandle.fileDescriptor
+                feedData.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
+                    guard let base = raw.baseAddress else { return }
+                    var off = 0
+                    while off < raw.count {
+                        let n = write(fd, base + off, raw.count - off)
+                        if n <= 0 { break }
+                        off += n
+                    }
+                }
+                try? feedHandle.close()
+                fed.signal()
+            }
+        }
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        if feedHandle != nil { fed.wait() }
+
+        // bash command substitution drops NUL bytes and strips trailing
+        // newlines. Lossy UTF-8 keeps a non-UTF-8 message non-empty (U+FFFD
+        // where bytes were invalid) rather than decoding to "" and aborting.
+        var bytes = [UInt8](data)
+        bytes.removeAll { $0 == 0 }
+        var msg = String(decoding: bytes, as: UTF8.self)
+        while msg.hasSuffix("\n") { msg.removeLast() }
+        return msg
+    }
+
+    /// `git diff --name-only` stdout ONLY (no stderr merge), raw and untrimmed,
+    /// exactly the bytes upstream feeds via `< <($GIT diff --name-only)`. A
+    /// stderr warning (common under core.autocrlf) must not become a filename,
+    /// and leading/trailing spaces in names must survive.
+    private static func diffNameOnlyStdout(_ spec: RepoSpec) -> Data {
+        var full = ["diff", "--name-only"]
+        if let gitDir = spec.gitDir { full = ["--work-tree", spec.workDir, "--git-dir", gitDir] + full }
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: GitRuntime.resolved.gitPath)
+        p.arguments = full
+        p.environment = GitRuntime.resolved.env
+        p.currentDirectoryURL = URL(fileURLWithPath: spec.workDir)
+        let out = Pipe()
+        p.standardOutput = out
+        do { try p.run() } catch { return Data() }
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        return data
     }
 
     /// The push stage of a cycle, exactly as gitwatch runs it. With -R, first

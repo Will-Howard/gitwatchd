@@ -4,7 +4,8 @@ import Foundation
 // that gitwatch users read our config/CLI with zero translation.
 //
 //   gitwatch  [-s secs] [-d fmt] [-r remote [-b branch]] [-R] [-m msg]
-//             [-l|-L lines] [-x pattern] [-M] [-g gitdir] [-e events] <target>
+//             [-c cmd] [-C] [-l|-L lines] [-x pattern] [-M] [-g gitdir]
+//             [-e events] <target>
 //
 // Each config line is exactly the argument string you'd pass to gitwatch.
 struct RepoSpec {
@@ -15,6 +16,10 @@ struct RepoSpec {
     var branch: String? = nil         // -b
     var rebase: Bool = false          // -R  pull --rebase before push
     var message: String = "gitwatchd auto-commit (%d)"  // -m  (%d -> date)
+    var commitCommand: String? = nil  // -c  its stdout becomes the commit message
+    var pipeChangedFiles: Bool = false // -C  pipe changed file names to the -c command
+    var listChanges: Int = -1         // -l/-L  diff lines allowed in the message; -1 off, 0 unlimited
+    var listChangesColor: Bool = true // false once -L appears; -l never restores it, as upstream
     var exclude: String? = nil        // -x  regex; last one wins, as upstream
     var noMergeCommit: Bool = false   // -M
     var commitOnStart: Bool = false   // -f  commit pending changes when watching starts
@@ -67,6 +72,14 @@ enum RepoSpecParser {
             case "-b": if let v = next() { spec.branch = v }
             case "-R": spec.rebase = true
             case "-m": if let v = next() { spec.message = v }
+            case "-c": if let v = next() { spec.commitCommand = v }
+            case "-C": spec.pipeChangedFiles = true // boolean: takes no argument
+            case "-l", "-L":
+                guard let v = next(), let n = Int(v), n >= 0 else {
+                    return (nil, "\(a) needs a number of lines, 0 or more")
+                }
+                spec.listChanges = n
+                if a == "-L" { spec.listChangesColor = false }
             case "-x":
                 guard let v = next(), (try? NSRegularExpression(pattern: v)) != nil else {
                     return (nil, "-x needs a valid regular expression")
@@ -76,6 +89,7 @@ enum RepoSpecParser {
             case "-f": spec.commitOnStart = true
             case "-g": if let v = next() { spec.gitDir = v }
             case "-e": _ = next() // inotify events: accepted, no-op on macOS (as upstream)
+            case "-v": break // verbose: accepted, no-op (no daemon equivalent to gitwatch's set -x)
             case "--paused": spec.paused = true // gitwatchd extension (see RepoSpec)
             default:
                 if a.hasPrefix("-") {

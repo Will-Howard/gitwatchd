@@ -26,6 +26,10 @@ This is the full list of available flags:
     -R            pull --rebase before each push
     -m <msg>      commit message; %d becomes the timestamp
     -d <fmt>      strftime format for that timestamp
+    -l <lines>    use the diff itself as the commit message, up to <lines> lines (0 = no limit)
+    -L <lines>    same as -l without colour. Known bug: on git versions > 2.39 this falls back to a status summary
+    -c <command>  run this command and use its output as the commit message (overrides -m/-d)
+    -C            pipe the changed file names into the -c command (requires -c flag, e.g. `gitwatchd -c 'xargs echo updated:' -C .`)
     -x <pattern>  skip changes whose path matches this regex
     -M            don't commit while a merge is in progress
     -f            commit anything already pending when watching starts
