@@ -1,11 +1,7 @@
 package main
 
-import (
-	"fmt"
-	"os"
-)
+import "os"
 
 func main() {
-	fmt.Fprintln(os.Stderr, "gitwatchd: not implemented on Linux yet")
-	os.Exit(1)
+	os.Exit(cliRun(os.Args[1:]))
 }
