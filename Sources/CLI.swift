@@ -6,7 +6,8 @@ import AppKit
 enum CLI {
     static let version = "0.2.0"   // keep in step with Resources/Info.plist
 
-    static func run(_ args: [String]) -> Int32 {
+    static func run(_ args: [String],
+                    invokedFrom directory: String = FileManager.default.currentDirectoryPath) -> Int32 {
         guard let first = args.first else { printUsage(); return 0 }
 
         switch first {
@@ -21,17 +22,17 @@ enum CLI {
         case "stop":                 return stopDaemon()
         case "config":               return config(Array(args.dropFirst()))
         case "autostart":            return autostart(Array(args.dropFirst()))
-        case "add":                  return add(Array(args.dropFirst()))
+        case "add":                  return add(Array(args.dropFirst()), invokedFrom: directory)
         default:
             // Bare form: `gitwatchd [flags] <target>`: implicit add.
-            return add(args)
+            return add(args, invokedFrom: directory)
         }
     }
 
     // MARK: - add
 
-    private static func add(_ args: [String]) -> Int32 {
-        let (spec, err) = RepoSpecParser.parse(args)
+    private static func add(_ args: [String], invokedFrom directory: String) -> Int32 {
+        let (spec, err, resolved) = RepoSpecParser.parse(args, invokedFrom: directory)
         guard let spec else { warn(err ?? "could not parse arguments"); return 1 }
 
         guard FileManager.default.fileExists(atPath: spec.path) else {
@@ -44,8 +45,9 @@ enum CLI {
             warn("already watching \(spec.name) (\(spec.path))"); return 1
         }
 
-        // Persist exactly what the user typed (gitwatch-style line).
-        let line = args.map(Config.quoteIfNeeded).joined(separator: " ")
+        // Persist what the user typed (gitwatch-style line), with the target
+        // resolved: the daemon reads this file from its own directory.
+        let line = resolved.map(Config.quoteIfNeeded).joined(separator: " ")
         Config.append(line)
         ensureDaemonRunning()
 
