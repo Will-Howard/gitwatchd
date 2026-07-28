@@ -2,17 +2,17 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
+	"unicode"
 )
-
-// The `gitwatchd` command-line client. Writes the shared config file (so it
-// works even when the daemon is down) and relies on the running daemon's live
-// reload. `add` accepts gitwatch's own flags verbatim, so gitwatch users need
-// no relearning.
 
 // Keep in step with the macOS CLI (macos/Sources/CLI.swift) and Info.plist:
 // the two implementations ship as one product and report one version.
@@ -20,6 +20,70 @@ const version = "0.2.0"
 
 // Tests set this false so CLI calls don't spawn the real daemon.
 var spawnsDaemon = true
+
+type ConfigError struct {
+	Label    string // repo name, or the offending line for parse errors
+	Reason   string // short fixed vocabulary, e.g. "repo not found"
+	Detail   string // full path or config line, for status
+	RepoPath string // set when there is a path to re-check for healing
+}
+
+// A watched-repo specification, expressed in gitwatch's own flag vocabulary so
+// that gitwatch users read our config/CLI with zero translation.
+//
+//	gitwatch  [-s secs] [-d fmt] [-r remote [-b branch]] [-R] [-m msg]
+//	          [-x pattern] [-M] [-g gitdir] [-e events] <target>
+//
+// Each config line is exactly the argument string you'd pass to gitwatch.
+type RepoSpec struct {
+	Path          string
+	Settle        float64 // -s  debounce seconds
+	DateFormat    string  // -d
+	Remote        string  // -r
+	Branch        string  // -b
+	Rebase        bool    // -R  pull --rebase before push
+	Message       string  // -m  (%d -> date)
+	Exclude       string  // -x  regex; last one wins, as upstream
+	NoMergeCommit bool    // -M
+	CommitOnStart bool    // -f  commit pending changes when watching starts
+	GitDir        string  // -g  --git-dir
+	Paused        bool    // --paused (gitwatchd extension, not gitwatch:
+	//                       config-level so a pause survives restarts)
+	Raw string // the config line this spec came from, for change detection
+
+	targetIndex int // which arg was the target, so add can persist it resolved
+}
+
+func (s RepoSpec) Name() string { return filepath.Base(s.Path) }
+
+func (s RepoSpec) IsFileTarget() bool {
+	info, err := os.Stat(s.Path)
+	return err != nil || !info.IsDir()
+}
+
+// Where git commands run: the target itself, or its parent for a file
+// target (upstream's TARGETDIR).
+func (s RepoSpec) WorkDir() string {
+	if s.IsFileTarget() {
+		return filepath.Dir(s.Path)
+	}
+	return s.Path
+}
+
+func (s RepoSpec) Excludes(fullPath string) bool {
+	if s.Exclude == "" {
+		return false
+	}
+	re, err := regexp.Compile(s.Exclude)
+	if err != nil {
+		return false
+	}
+	return re.MatchString(fullPath)
+}
+
+func main() {
+	os.Exit(cliRun(os.Args[1:]))
+}
 
 func cliRun(args []string) int {
 	if len(args) == 0 {
@@ -56,7 +120,6 @@ func cliRun(args []string) int {
 	case "daemon":
 		return runDaemon()
 	default:
-		// Bare form: `gitwatchd [flags] <target>`: implicit add.
 		return cliAdd(args)
 	}
 }
@@ -359,8 +422,6 @@ func cliStop() int {
 	return 0
 }
 
-// Detached spawn for systems without systemd: its own session (setsid), output
-// to a log file so the terminal can close.
 func spawnDaemon() error {
 	exe, err := os.Executable()
 	if err != nil {
@@ -404,6 +465,549 @@ func ensureDaemonRunning() {
 
 func warn(msg string) {
 	fmt.Fprintln(os.Stderr, "✗ "+msg)
+}
+
+// Config = a list of gitwatch-style argument lines, one repo per line.
+// Hand-editable and CLI-writable; the CLI appends exactly what the user typed.
+
+func configPath() string {
+	if p := os.Getenv("GITWATCHD_CONFIG"); p != "" {
+		return p
+	}
+	return filepath.Join(homeDir(), ".gitwatchd")
+}
+
+func configEnsureExists() {
+	if _, err := os.Stat(configPath()); err == nil {
+		return
+	}
+	template := `# gitwatchd: one repo per line.
+#   [-s secs] [-r remote [-b branch]] [-R] [-m msg] [-x pattern] [-M] [--paused] <path>
+# ` + "`gitwatchd help`" + ` explains each flag. Examples:
+#   ~/code/my-notes
+#   -s 5 -r origin -b main ~/code/blog
+# (from a terminal, ` + "`gitwatchd .`" + ` adds the current repo here for you)
+`
+	os.WriteFile(configPath(), []byte(template), 0o644)
+}
+
+func configRawLines() []string {
+	text, err := os.ReadFile(configPath())
+	if err != nil {
+		return nil
+	}
+	var lines []string
+	for _, l := range strings.Split(string(text), "\n") {
+		l = strings.TrimSpace(l)
+		if l != "" && !strings.HasPrefix(l, "#") {
+			lines = append(lines, l)
+		}
+	}
+	return lines
+}
+
+func configSpecs() []*RepoSpec {
+	var specs []*RepoSpec
+	for _, line := range configRawLines() {
+		if spec, _ := parseRepoSpec(tokenize(line)); spec != nil {
+			spec.Raw = line
+			specs = append(specs, spec)
+		}
+	}
+	return specs
+}
+
+func configLineErrors() []ConfigError {
+	var errs []ConfigError
+	for _, line := range configRawLines() {
+		if spec, msg := parseRepoSpec(tokenize(line)); spec == nil {
+			if msg == "" {
+				msg = "unparseable line"
+			}
+			errs = append(errs, ConfigError{Label: line, Reason: msg, Detail: line})
+		}
+	}
+	return errs
+}
+
+func configLoad() ([]*RepoSpec, []ConfigError) {
+	errs := configLineErrors()
+	var watchable []*RepoSpec
+	for _, spec := range configSpecs() {
+		reason := ""
+		if _, err := os.Stat(spec.Path); err != nil {
+			reason = "repo not found"
+		} else if !isRepo(spec.WorkDir(), spec.GitDir) {
+			reason = "not a git repo"
+		} else {
+			watchable = append(watchable, spec)
+			continue
+		}
+		errs = append(errs, ConfigError{Label: spec.Name(), Reason: reason,
+			Detail: spec.Path, RepoPath: spec.Path})
+	}
+	return watchable, errs
+}
+
+func configAppend(line string) {
+	configEnsureExists()
+	raw, _ := os.ReadFile(configPath())
+	text := string(raw)
+	if text != "" && !strings.HasSuffix(text, "\n") {
+		text += "\n"
+	}
+	text += line + "\n"
+	os.WriteFile(configPath(), []byte(text), 0o644)
+}
+
+func configMatches(spec *RepoSpec, needle string) bool {
+	return spec.Path == expandTilde(needle) || spec.Name() == needle || spec.Path == needle
+}
+
+func configRemove(needle string) int {
+	raw, err := os.ReadFile(configPath())
+	if err != nil {
+		return 0
+	}
+	removed := 0
+	var kept []string
+	for _, rawLine := range strings.Split(string(raw), "\n") {
+		line := strings.TrimSpace(rawLine)
+		if line == "" || strings.HasPrefix(line, "#") {
+			kept = append(kept, rawLine)
+			continue
+		}
+		spec, _ := parseRepoSpec(tokenize(line))
+		if spec != nil && configMatches(spec, needle) {
+			removed++
+			continue
+		}
+		kept = append(kept, rawLine)
+	}
+	os.WriteFile(configPath(), []byte(strings.Join(kept, "\n")), 0o644)
+	return removed
+}
+
+// Flip the --paused token on config lines matching `needle` (by full
+// path or repo name, like remove). Pause lives in the config, not daemon
+// state, so it survives daemon and machine restarts. Returns the number
+// of lines changed.
+func configSetPaused(needle string, paused bool) int {
+	raw, err := os.ReadFile(configPath())
+	if err != nil {
+		return 0
+	}
+	changed := 0
+	var lines []string
+	for _, rawLine := range strings.Split(string(raw), "\n") {
+		trimmed := strings.TrimSpace(rawLine)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			lines = append(lines, rawLine)
+			continue
+		}
+		spec, _ := parseRepoSpec(tokenize(trimmed))
+		if spec == nil || !configMatches(spec, needle) {
+			lines = append(lines, rawLine)
+			continue
+		}
+		rewritten, ok := togglingPaused(trimmed, spec.Path, paused)
+		if !ok {
+			lines = append(lines, rawLine)
+			continue
+		}
+		changed++
+		lines = append(lines, rewritten)
+	}
+	if changed > 0 {
+		os.WriteFile(configPath(), []byte(strings.Join(lines, "\n")), 0o644)
+	}
+	return changed
+}
+
+// The pure rewrite behind configSetPaused: if `line` watches `path` and its
+// paused state differs, return the line with --paused added (in front)
+// or removed; else ok=false for "leave this line alone".
+func togglingPaused(line string, path string, paused bool) (string, bool) {
+	tokens := tokenize(line)
+	spec, _ := parseRepoSpec(tokens)
+	if spec == nil || spec.Path != path || spec.Paused == paused {
+		return "", false
+	}
+	var kept []string
+	for _, t := range tokens {
+		if t != "--paused" {
+			kept = append(kept, t)
+		}
+	}
+	if paused {
+		kept = append([]string{"--paused"}, kept...)
+	}
+	quoted := make([]string, len(kept))
+	for i, t := range kept {
+		quoted[i] = quoteIfNeeded(t)
+	}
+	return strings.Join(quoted, " "), true
+}
+
+// The tokenizer has no escape syntax: a value with both quote kinds
+// cannot round-trip.
+func quoteIfNeeded(s string) string {
+	if strings.Contains(s, `"`) && !strings.Contains(s, "'") {
+		return "'" + s + "'"
+	}
+	if strings.Contains(s, " ") || strings.Contains(s, `"`) || strings.Contains(s, "'") {
+		return `"` + s + `"`
+	}
+	return s
+}
+
+// Split a config line into arguments on whitespace, respecting simple single
+// or double quotes so that `-m "two words"` stays a single argument.
+func tokenize(line string) []string {
+	var args []string
+	var current strings.Builder
+	var openQuote rune // the quote char we're inside, 0 if none
+
+	finishArg := func() {
+		if current.Len() > 0 {
+			args = append(args, current.String())
+			current.Reset()
+		}
+	}
+
+	for _, ch := range line {
+		switch {
+		case openQuote != 0:
+			if ch == openQuote {
+				openQuote = 0
+			} else {
+				current.WriteRune(ch)
+			}
+		case ch == '"' || ch == '\'':
+			openQuote = ch
+		case unicode.IsSpace(ch):
+			finishArg()
+		default:
+			current.WriteRune(ch)
+		}
+	}
+	finishArg()
+	return args
+}
+
+// Parse a gitwatch-style argument list into a RepoSpec.
+// Returns nil + an error message if there's no valid target.
+func parseRepoSpec(args []string) (*RepoSpec, string) {
+	spec := &RepoSpec{
+		Settle:     2,
+		DateFormat: "+%Y-%m-%d %H:%M:%S",
+		Message:    "gitwatchd auto-commit (%d)",
+	}
+	target := ""
+	haveTarget := false
+	i := 0
+	next := func() (string, bool) {
+		i++
+		if i < len(args) {
+			return args[i], true
+		}
+		return "", false
+	}
+
+	for i < len(args) {
+		a := args[i]
+		switch a {
+		case "-s":
+			v, ok := next()
+			d, err := strconv.ParseFloat(v, 64)
+			if !ok || err != nil || d < 0 {
+				return nil, "-s needs a number of seconds, 0 or more"
+			}
+			spec.Settle = d
+		case "-d":
+			if v, ok := next(); ok {
+				spec.DateFormat = v
+			}
+		case "-r", "-p": // -p: upstream's alias of -r
+			if v, ok := next(); ok {
+				spec.Remote = v
+			}
+		case "-b":
+			if v, ok := next(); ok {
+				spec.Branch = v
+			}
+		case "-R":
+			spec.Rebase = true
+		case "-m":
+			if v, ok := next(); ok {
+				spec.Message = v
+			}
+		case "-x":
+			v, ok := next()
+			if !ok {
+				return nil, "-x needs a valid regular expression"
+			}
+			if _, err := regexp.Compile(v); err != nil {
+				return nil, "-x needs a valid regular expression"
+			}
+			spec.Exclude = v
+		case "-M":
+			spec.NoMergeCommit = true
+		case "-f":
+			spec.CommitOnStart = true
+		case "-g":
+			if v, ok := next(); ok {
+				spec.GitDir = v
+			}
+		case "-e":
+			next() // inotify events: accepted, no-op (we watch a fixed gitwatch-like set)
+		case "--paused":
+			spec.Paused = true
+		default:
+			if strings.HasPrefix(a, "-") {
+				return nil, "unknown flag " + a
+			}
+			target = a // last bare arg wins as the target
+			spec.targetIndex = i
+			haveTarget = true
+		}
+		i++
+	}
+
+	if !haveTarget {
+		return nil, "no target path given"
+	}
+	spec.Path = normalizePath(target)
+	return spec, ""
+}
+
+func normalizePath(p string) string {
+	p = expandTilde(p)
+	if !filepath.IsAbs(p) {
+		cwd, err := os.Getwd()
+		if err == nil {
+			p = filepath.Join(cwd, p)
+		}
+	}
+	return filepath.Clean(p)
+}
+
+func expandTilde(p string) string {
+	if p == "~" {
+		return homeDir()
+	}
+	if strings.HasPrefix(p, "~/") {
+		return filepath.Join(homeDir(), p[2:])
+	}
+	return p
+}
+
+func homeDir() string {
+	h, err := os.UserHomeDir()
+	if err != nil {
+		return "/"
+	}
+	return h
+}
+
+// Pure string formatting for `gitwatchd status`. Same rows and strings as the
+// macOS menu, so the habit transfers between machines unchanged.
+
+// One status tail at most: paused wins over errors, errors over pending.
+func rowTitle(name, branch string, paused bool, pending int, errorLabel string) string {
+	base := name + " · " + branch
+	if paused {
+		return base + " · ⏸ paused"
+	}
+	if errorLabel != "" {
+		return base + " · ⚠ " + errorLabel
+	}
+	if pending == 1 {
+		return base + " · 1 pending change"
+	}
+	if pending > 1 {
+		return fmt.Sprintf("%s · %d pending changes", base, pending)
+	}
+	return base
+}
+
+// Fixed-width row; the full path lives on the detail line.
+func configErrorRow(label, reason string) string {
+	return truncated("⚠ "+label+" · "+reason, 48)
+}
+
+func errorHeadline(label string, attempts int) string {
+	if attempts > 1 {
+		return fmt.Sprintf("⚠ %s (%d attempts)", label, attempts)
+	}
+	return "⚠ " + label
+}
+
+func retryLine(lastTried time.Time, nextRetry *time.Time, now time.Time) string {
+	tried := "tried " + ago(now.Sub(lastTried).Seconds())
+	if nextRetry == nil {
+		return tried + " · retries on next change"
+	}
+	dt := nextRetry.Sub(now).Seconds()
+	if dt <= 1 {
+		return tried + " · retrying now"
+	}
+	return tried + " · retrying in " + span(dt)
+}
+
+func truncated(s string, max int) string {
+	runes := []rune(s)
+	if len(runes) <= max {
+		return s
+	}
+	return string(runes[:max-1]) + "…"
+}
+
+func ago(seconds float64) string {
+	if seconds < 5 {
+		return "just now"
+	}
+	return span(seconds) + " ago"
+}
+
+func span(seconds float64) string {
+	s := int(math.Round(seconds))
+	if s < 1 {
+		s = 1
+	}
+	if s < 90 {
+		return fmt.Sprintf("%ds", s)
+	}
+	if s < 90*60 {
+		return fmt.Sprintf("%dm", int(math.Round(float64(s)/60)))
+	}
+	if s < 36*3600 {
+		return fmt.Sprintf("%dh", int(math.Round(float64(s)/3600)))
+	}
+	return fmt.Sprintf("%dd", int(math.Round(float64(s)/86400)))
+}
+
+// Autostart = a systemd user unit, the standard way for a per-user daemon to
+// survive reboots and headless boots (with lingering). When systemd is absent
+// we say so and do nothing: no shell-profile edits, ever.
+
+func unitPath() string {
+	return filepath.Join(homeDir(), ".config", "systemd", "user", "gitwatchd.service")
+}
+
+func systemctlPresent() bool {
+	_, err := exec.LookPath("systemctl")
+	return err == nil
+}
+
+func unitInstalled() bool {
+	_, err := os.Stat(unitPath())
+	return err == nil
+}
+
+func systemctlUser(args ...string) (int, string) {
+	return runCommand("systemctl", append([]string{"--user"}, args...), "")
+}
+
+func unitActive() bool {
+	_, out := systemctlUser("is-active", "gitwatchd")
+	return out == "active"
+}
+
+func autostartOn() int {
+	if !systemctlPresent() {
+		warn("systemd not found: autostart needs a systemd user session.\n" +
+			"  run the daemon manually instead: gitwatchd start")
+		return 1
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		warn("cannot resolve the gitwatchd binary path: " + err.Error())
+		return 1
+	}
+	exe, _ = filepath.EvalSymlinks(exe)
+	unit := fmt.Sprintf(`[Unit]
+Description=gitwatchd: watch git repos and auto-commit changes
+
+[Service]
+ExecStart=%s daemon
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+`, exe)
+	if err := os.MkdirAll(filepath.Dir(unitPath()), 0o755); err != nil {
+		warn("cannot create " + filepath.Dir(unitPath()) + ": " + err.Error())
+		return 1
+	}
+	if err := os.WriteFile(unitPath(), []byte(unit), 0o644); err != nil {
+		warn("cannot write " + unitPath() + ": " + err.Error())
+		return 1
+	}
+	systemctlUser("daemon-reload")
+	// A directly spawned daemon holds the single-instance lock and would
+	// make the unit fail; hand it over to systemd.
+	if isDaemonRunning() && !unitActive() {
+		if pid := daemonPid(); pid > 0 {
+			syscall.Kill(pid, syscall.SIGTERM)
+			for i := 0; i < 50 && isDaemonRunning(); i++ {
+				time.Sleep(100 * time.Millisecond)
+			}
+		}
+	}
+	if code, out := systemctlUser("enable", "--now", "gitwatchd"); code != 0 {
+		warn("systemctl --user enable --now gitwatchd failed: " + out)
+		return 1
+	}
+	// Lingering keeps the user manager (and the daemon) alive without an
+	// open session: headless boots, logged-out laptops.
+	if code, out := runCommand("loginctl", []string{"enable-linger", os.Getenv("USER")}, ""); code != 0 {
+		fmt.Println("✓ autostart: on (systemd user unit enabled)")
+		fmt.Println("  note: loginctl enable-linger failed (" + strings.TrimSpace(out) + ")")
+		fmt.Println("  without lingering the daemon stops when you log out")
+		return 0
+	}
+	fmt.Println("✓ autostart: on (systemd user unit enabled, survives logout and reboot)")
+	return 0
+}
+
+func autostartOff() int {
+	if !systemctlPresent() {
+		warn("systemd not found: nothing to turn off (autostart was never installed)")
+		return 1
+	}
+	if !unitInstalled() {
+		fmt.Println("autostart: already off")
+		return 0
+	}
+	systemctlUser("disable", "--now", "gitwatchd")
+	os.Remove(unitPath())
+	systemctlUser("daemon-reload")
+	fmt.Println("✓ autostart: off")
+	return 0
+}
+
+func autostartStatus() int {
+	if !systemctlPresent() {
+		fmt.Println("autostart: unavailable (systemd not found); run the daemon with: gitwatchd start")
+		return 0
+	}
+	if !unitInstalled() {
+		fmt.Println("autostart: off")
+		return 0
+	}
+	_, enabled := systemctlUser("is-enabled", "gitwatchd")
+	state := "on"
+	if enabled != "enabled" {
+		state = "installed but " + enabled
+	}
+	if unitActive() {
+		fmt.Printf("autostart: %s (daemon running)\n", state)
+	} else {
+		fmt.Printf("autostart: %s (daemon not running)\n", state)
+	}
+	return 0
 }
 
 const usageText = `gitwatchd - daemon that watches git repos and auto-commits changes

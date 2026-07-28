@@ -43,7 +43,6 @@ func (o Outcome) ErrorLabel() string {
 	return ""
 }
 
-// Run a program and capture stdout+stderr, trimmed.
 func runCommand(exe string, args []string, cwd string) (int, string) {
 	cmd := exec.Command(exe, args...)
 	if cwd != "" {
@@ -99,7 +98,6 @@ func lastCommitSummary(dir string, gitDir string) string {
 	return out
 }
 
-// True if a state file/dir exists inside the repo's resolved .git dir.
 func gitStateExists(names []string, dir string, gitDir string) bool {
 	code, top := gitRun([]string{"rev-parse", "--git-dir"}, dir, gitDir)
 	if code != 0 {
@@ -231,8 +229,6 @@ func pushArgs(remote string, spec *RepoSpec) []string {
 	return []string{"push", remote, current + ":" + spec.Branch}
 }
 
-// The most informative line of a failed command's output: the first
-// error/fatal/rejection line if there is one, else the last non-empty line.
 func errorSummary(out string) string {
 	var lines []string
 	for _, l := range strings.Split(out, "\n") {
@@ -251,4 +247,15 @@ func errorSummary(out string) string {
 		return lines[len(lines)-1]
 	}
 	return "unknown git error"
+}
+
+// Render the current date exactly as upstream does: the -d value passes to
+// date(1) verbatim (the user includes the leading +), and a format date(1)
+// rejects yields an empty string.
+func formattedDate(fmt string) string {
+	code, out := runCommand("date", []string{fmt}, "")
+	if code != 0 {
+		return ""
+	}
+	return out
 }

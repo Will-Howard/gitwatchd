@@ -1,0 +1,820 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+)
+
+type testRepo struct {
+	t    *testing.T
+	path string
+}
+
+func newTestRepo(t *testing.T) *testRepo {
+	t.Helper()
+	r := &testRepo{t: t, path: filepath.Join(t.TempDir(), "repo")}
+	os.MkdirAll(r.path, 0o755)
+	r.git("init", "-q", "-b", "main")
+	r.configureUser()
+	return r
+}
+
+// A second working copy of a remote (a colleague's machine).
+func newCloneOf(t *testing.T, remote *bareRemote) *testRepo {
+	t.Helper()
+	r := &testRepo{t: t, path: filepath.Join(t.TempDir(), "clone")}
+	runCommand("git", []string{"clone", "-q", remote.path, r.path}, "")
+	r.configureUser()
+	return r
+}
+
+func (r *testRepo) configureUser() {
+	r.git("config", "user.email", "tests@gitwatchd.local")
+	r.git("config", "user.name", "gitwatchd tests")
+	r.git("config", "commit.gpgsign", "false")
+}
+
+// The spec `gitwatchd add <flags> <path>` would produce.
+func (r *testRepo) spec(flags ...string) *RepoSpec {
+	r.t.Helper()
+	spec, errMsg := parseRepoSpec(append(flags, r.path))
+	if spec == nil {
+		r.t.Fatalf("spec did not parse: %s", errMsg)
+	}
+	return spec
+}
+
+func (r *testRepo) git(args ...string) string {
+	_, out := gitRun(args, r.path, "")
+	return out
+}
+
+func (r *testRepo) write(file, contents string) {
+	r.t.Helper()
+	full := filepath.Join(r.path, file)
+	os.MkdirAll(filepath.Dir(full), 0o755)
+	if err := os.WriteFile(full, []byte(contents), 0o644); err != nil {
+		r.t.Fatal(err)
+	}
+}
+
+func (r *testRepo) commitCount() int {
+	n, _ := strconv.Atoi(r.git("rev-list", "--count", "HEAD"))
+	return n
+}
+
+func (r *testRepo) lastMessage() string { return r.git("log", "-1", "--pretty=%s") }
+
+func (r *testRepo) midMerge() bool {
+	_, err := os.Stat(filepath.Join(r.path, ".git", "MERGE_HEAD"))
+	return err == nil
+}
+
+func (r *testRepo) midRebase() bool {
+	for _, d := range []string{"rebase-merge", "rebase-apply"} {
+		if _, err := os.Stat(filepath.Join(r.path, ".git", d)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *testRepo) addOrigin() *bareRemote {
+	remote := newBareRemote(r.t)
+	r.git("remote", "add", "origin", remote.path)
+	return remote
+}
+
+func (r *testRepo) addOriginURL(url string) {
+	r.git("remote", "add", "origin", url)
+}
+
+func (r *testRepo) setOriginURL(url string) { r.git("remote", "set-url", "origin", url) }
+
+func (r *testRepo) installFailingPreCommitHook(printing string) {
+	hook := filepath.Join(r.path, ".git", "hooks", "pre-commit")
+	os.WriteFile(hook, []byte("#!/bin/sh\necho '"+printing+"'\nexit 1\n"), 0o755)
+}
+
+func (r *testRepo) commit(file, contents, message string) {
+	r.write(file, contents)
+	r.git("add", "-A")
+	r.git("commit", "-q", "-m", message)
+}
+
+// Set main to track origin/main, as a cloned repo would. The branch-less
+// `pull --rebase <remote>` needs it.
+func (r *testRepo) trackOrigin() {
+	r.git("fetch", "-q", "origin")
+	r.git("branch", "-q", "--set-upstream-to=origin/main", "main")
+}
+
+// Stop this repo mid-merge on a real conflict. Plain git only, so tests
+// never exercise the engine during their own setup.
+func (r *testRepo) conflictedMerge() {
+	r.commit("f.txt", "base\n", "base")
+	r.git("checkout", "-q", "-b", "side")
+	r.commit("f.txt", "side\n", "side edit")
+	r.git("checkout", "-q", "main")
+	r.commit("f.txt", "main\n", "main edit")
+	r.git("merge", "side") // conflicts, leaving MERGE_HEAD behind
+}
+
+type bareRemote struct {
+	path string
+}
+
+func newBareRemote(t *testing.T) *bareRemote {
+	t.Helper()
+	b := &bareRemote{path: filepath.Join(t.TempDir(), "remote.git")}
+	runCommand("git", []string{"init", "-q", "--bare", "-b", "main", b.path}, "")
+	return b
+}
+
+func (b *bareRemote) commitCount() int {
+	code, out := gitRun([]string{"rev-list", "--count", "main"}, b.path, "")
+	if code != 0 {
+		return 0
+	}
+	n, _ := strconv.Atoi(out)
+	return n
+}
+
+func (b *bareRemote) lastMessage() string {
+	_, out := gitRun([]string{"log", "-1", "--pretty=%s", "main"}, b.path, "")
+	return out
+}
+
+// Engine tests drive autoCommit / push against real throwaway git repos,
+// asserting both the reported outcome and the repo state left behind
+// (the gitwatch parity contract: same commands, same end state).
+
+func TestCleanRepoDoesNothing(t *testing.T) {
+	repo := newTestRepo(t)
+	repo.write("seed.txt", "v1")
+	autoCommit(repo.spec()) // absorb the initial commit
+	if got := autoCommit(repo.spec()); got.Kind != Clean {
+		t.Errorf("got %+v", got)
+	}
+	if repo.commitCount() != 1 {
+		t.Error("no extra commit should appear")
+	}
+}
+
+func TestChangesCommitLocallyWithoutRemote(t *testing.T) {
+	repo := newTestRepo(t)
+	repo.write("notes.txt", "hello")
+	if got := autoCommit(repo.spec()); got.Kind != Committed {
+		t.Errorf("got %+v", got)
+	}
+	if repo.commitCount() != 1 {
+		t.Errorf("commits = %d", repo.commitCount())
+	}
+	if !strings.HasPrefix(repo.lastMessage(), "gitwatchd auto-commit") {
+		t.Errorf("default message expected, got: %s", repo.lastMessage())
+	}
+}
+
+func TestCustomMessageAndDateExpansion(t *testing.T) {
+	repo := newTestRepo(t)
+	repo.write("a.txt", "1")
+	autoCommit(repo.spec("-m", "saved on %d", "-d", "+%Y"))
+	if !strings.HasPrefix(repo.lastMessage(), "saved on 2") { // "saved on 2026"
+		t.Errorf("got: %s", repo.lastMessage())
+	}
+}
+
+// Sharp corner, kept for upstream parity: -d goes to date(1) raw, so a
+// format without a leading + splices an empty date. Git's commit-message
+// cleanup then trims the trailing whitespace.
+func TestSharpCornerRawDateFormatWithoutPlusSplicesEmptyDate(t *testing.T) {
+	repo := newTestRepo(t)
+	repo.write("a.txt", "1")
+	autoCommit(repo.spec("-m", "at %d", "-d", "%Y"))
+	if repo.lastMessage() != "at" {
+		t.Errorf("got %q, want %q", repo.lastMessage(), "at")
+	}
+}
+
+func TestOnlyTheFirstDateTokenIsExpanded(t *testing.T) {
+	repo := newTestRepo(t)
+	repo.write("a.txt", "1")
+	autoCommit(repo.spec("-m", "saved %d then %d", "-d", "+%Y"))
+	got := repo.lastMessage()
+	if !strings.HasPrefix(got, "saved 2") || !strings.HasSuffix(got, " then %d") {
+		t.Errorf("upstream splices the date into the first %%d only, got: %s", got)
+	}
+}
+
+func TestPushToRemote(t *testing.T) {
+	repo := newTestRepo(t)
+	origin := repo.addOrigin()
+	repo.write("a.txt", "1")
+	if got := autoCommit(repo.spec("-r", "origin", "-b", "main")); got.Kind != Pushed {
+		t.Errorf("got %+v", got)
+	}
+	if origin.commitCount() != 1 {
+		t.Error("the remote should have the commit")
+	}
+}
+
+func TestUnreachableRemoteReportsPushFailedButCommitSurvives(t *testing.T) {
+	repo := newTestRepo(t)
+	repo.addOriginURL(filepath.Join(t.TempDir(), "not-a-remote.git"))
+	repo.write("a.txt", "1")
+	got := autoCommit(repo.spec("-r", "origin", "-b", "main"))
+	if got.Kind != PushFailed {
+		t.Fatalf("expected pushFailed, got %+v", got)
+	}
+	if got.Detail == "" {
+		t.Error("the git error is captured for status")
+	}
+	if repo.commitCount() != 1 {
+		t.Error("gitwatch parity: commit stays, only the push failed")
+	}
+}
+
+func TestPushRetriesStrandedCommitAfterOutage(t *testing.T) {
+	repo := newTestRepo(t)
+	origin := newBareRemote(t)
+	repo.addOriginURL(filepath.Join(t.TempDir(), "offline.git")) // remote "down"
+	repo.write("a.txt", "1")
+	if got := autoCommit(repo.spec("-r", "origin", "-b", "main")); got.Kind != PushFailed {
+		t.Fatalf("setup: expected the first push to fail, got %+v", got)
+	}
+	repo.setOriginURL(origin.path) // remote "back up"
+	if got := push(repo.spec("-r", "origin", "-b", "main")); got.Kind != Pushed {
+		t.Errorf("got %+v", got)
+	}
+	if origin.commitCount() != 1 {
+		t.Error("the earlier commit reached the remote")
+	}
+}
+
+func TestPullFailureWhileOfflineIsTransientNotConflict(t *testing.T) {
+	repo := newTestRepo(t)
+	repo.addOriginURL(filepath.Join(t.TempDir(), "gone.git"))
+	repo.write("a.txt", "1")
+	got := autoCommit(repo.spec("-r", "origin", "-b", "main", "-R"))
+	if got.Kind != PushFailed {
+		t.Fatalf("expected pushFailed, got %+v", got)
+	}
+	if repo.midRebase() {
+		t.Error("no rebase was ever started, so the retry loop may heal this")
+	}
+}
+
+func TestIdempotentRetryStillReportsPushed(t *testing.T) {
+	repo := newTestRepo(t)
+	repo.addOrigin()
+	repo.write("a.txt", "1")
+	spec := repo.spec("-r", "origin", "-b", "main")
+	autoCommit(spec)
+	if got := push(spec); got.Kind != Pushed { // "Everything up-to-date"
+		t.Errorf("got %+v", got)
+	}
+}
+
+func TestPushFormWithoutBranch(t *testing.T) {
+	spec, _ := parseRepoSpec([]string{"-r", "origin", "/tmp/x"})
+	got := pushArgs("origin", spec)
+	if strings.Join(got, " ") != "push origin" {
+		t.Errorf("got %v", got)
+	}
+}
+
+func TestPushFormWithBranch(t *testing.T) {
+	repo := newTestRepo(t)
+	repo.write("a.txt", "1")
+	autoCommit(repo.spec())
+	repo.git("checkout", "-q", "-b", "feature")
+	got := pushArgs("origin", repo.spec("-r", "origin", "-b", "main"))
+	if strings.Join(got, " ") != "push origin feature:main" {
+		t.Errorf("got %v", got)
+	}
+}
+
+func TestPushFormFromDetachedHead(t *testing.T) {
+	repo := newTestRepo(t)
+	repo.write("a.txt", "1")
+	autoCommit(repo.spec())
+	repo.git("checkout", "-q", "--detach")
+	got := pushArgs("origin", repo.spec("-r", "origin", "-b", "main"))
+	if strings.Join(got, " ") != "push origin main" {
+		t.Errorf("got %v", got)
+	}
+}
+
+func TestRefspecEndToEnd(t *testing.T) {
+	repo := newTestRepo(t)
+	origin := repo.addOrigin()
+	repo.write("a.txt", "base\n")
+	autoCommit(repo.spec("-r", "origin", "-b", "main"))
+	repo.git("checkout", "-q", "-b", "feature")
+	repo.write("b.txt", "on feature\n")
+	if got := autoCommit(repo.spec("-r", "origin", "-b", "main", "-m", "from feature")); got.Kind != Pushed {
+		t.Fatalf("got %+v", got)
+	}
+	if origin.commitCount() != 2 {
+		t.Error("the remote's main received the feature commit")
+	}
+	if origin.lastMessage() != "from feature" {
+		t.Errorf("got %q", origin.lastMessage())
+	}
+}
+
+func TestRebaseThenPush(t *testing.T) {
+	repo := newTestRepo(t)
+	origin := repo.addOrigin()
+	repo.write("ours.txt", "base\n")
+	autoCommit(repo.spec("-r", "origin", "-b", "main"))
+	repo.trackOrigin()
+
+	colleague := newCloneOf(t, origin)
+	colleague.write("theirs.txt", "from the other machine\n")
+	autoCommit(colleague.spec("-r", "origin", "-b", "main", "-m", "made elsewhere"))
+
+	repo.write("ours.txt", "updated here\n")
+	got := autoCommit(repo.spec("-r", "origin", "-b", "main", "-R", "-m", "made here"))
+	if got.Kind != Pushed {
+		t.Fatalf("got %+v", got)
+	}
+	if origin.commitCount() != 3 {
+		t.Error("base, theirs, ours: one linear history")
+	}
+	if origin.lastMessage() != "made here" {
+		t.Error("our commit was rebased on top")
+	}
+	if !strings.Contains(repo.git("log", "--pretty=%s"), "made elsewhere") {
+		t.Error("their commit is now part of our local history")
+	}
+}
+
+func TestMergeGuardSkipsMidMerge(t *testing.T) {
+	repo := newTestRepo(t)
+	repo.conflictedMerge()
+	if !repo.midMerge() {
+		t.Fatal("setup: repo should be mid-merge")
+	}
+	if got := autoCommit(repo.spec("-M")); got.Kind != SkippedMerge {
+		t.Errorf("got %+v", got)
+	}
+	if !repo.midMerge() {
+		t.Error("the merge is left exactly as it was")
+	}
+}
+
+func TestWithoutMergeGuardTheMergeIsCommitted(t *testing.T) {
+	repo := newTestRepo(t)
+	repo.conflictedMerge()
+	if got := autoCommit(repo.spec()); got.Kind != Committed {
+		t.Errorf("got %+v", got)
+	}
+	if repo.midMerge() {
+		t.Error("the commit concluded the merge, as gitwatch would")
+	}
+}
+
+func TestSubdirectoryTargetCommitsOnlyTheSubtree(t *testing.T) {
+	repo := newTestRepo(t)
+	repo.write("sub/inner.txt", "v1\n")
+	autoCommit(repo.spec())
+	repo.write("sub/inner.txt", "v2\n")
+	repo.write("outer.txt", "left alone\n")
+	spec, _ := parseRepoSpec([]string{filepath.Join(repo.path, "sub")})
+	if got := autoCommit(spec); got.Kind != Committed {
+		t.Fatalf("got %+v", got)
+	}
+	if pendingCount(repo.path, "") != 1 {
+		t.Error("outer.txt stays uncommitted")
+	}
+	if repo.git("show", "--name-only", "--pretty=") != "sub/inner.txt" {
+		t.Errorf("got %q", repo.git("show", "--name-only", "--pretty="))
+	}
+}
+
+func TestFileTargetCommitsOnlyThatFile(t *testing.T) {
+	repo := newTestRepo(t)
+	repo.write("a.txt", "v1\n")
+	autoCommit(repo.spec())
+	repo.write("a.txt", "v2\n")
+	repo.write("b.txt", "left alone\n")
+	spec, _ := parseRepoSpec([]string{filepath.Join(repo.path, "a.txt")})
+	if got := autoCommit(spec); got.Kind != Committed {
+		t.Fatalf("got %+v", got)
+	}
+	if pendingCount(repo.path, "") != 1 {
+		t.Error("b.txt stays uncommitted")
+	}
+	if repo.git("show", "--name-only", "--pretty=") != "a.txt" {
+		t.Errorf("got %q", repo.git("show", "--name-only", "--pretty="))
+	}
+}
+
+func TestOutsideChangesOnlyReportClean(t *testing.T) {
+	repo := newTestRepo(t)
+	repo.write("sub/inner.txt", "v1\n")
+	autoCommit(repo.spec())
+	repo.write("outer.txt", "elsewhere\n")
+	before := repo.commitCount()
+	spec, _ := parseRepoSpec([]string{filepath.Join(repo.path, "sub")})
+	if got := autoCommit(spec); got.Kind != Clean {
+		t.Errorf("got %+v", got)
+	}
+	if repo.commitCount() != before {
+		t.Error("no commit should appear")
+	}
+}
+
+func TestDetachedGitDir(t *testing.T) {
+	repo := newTestRepo(t)
+	repo.write("a.txt", "base\n")
+	autoCommit(repo.spec())
+	gitDir := filepath.Join(t.TempDir(), "elsewhere.git")
+	if err := os.Rename(filepath.Join(repo.path, ".git"), gitDir); err != nil {
+		t.Fatal(err)
+	}
+	spec := repo.spec("-g", gitDir)
+	if !isRepo(repo.path, gitDir) {
+		t.Error("the daemon/CLI validation path must accept a -g repo")
+	}
+	repo.write("a.txt", "changed\n")
+	if got := autoCommit(spec); got.Kind != Committed {
+		t.Fatalf("got %+v", got)
+	}
+	if _, out := gitRun([]string{"rev-list", "--count", "HEAD"}, repo.path, gitDir); out != "2" {
+		t.Errorf("commits = %s", out)
+	}
+	if got := autoCommit(spec); got.Kind != Clean {
+		t.Error("and the change was fully committed")
+	}
+}
+
+func TestFailingPreCommitHookReportsCommitFailed(t *testing.T) {
+	repo := newTestRepo(t)
+	repo.installFailingPreCommitHook("lint says no")
+	repo.write("a.txt", "1")
+	got := autoCommit(repo.spec())
+	if got.Kind != CommitFailed {
+		t.Fatalf("expected commitFailed, got %+v", got)
+	}
+	if !strings.Contains(got.Detail, "lint says no") {
+		t.Errorf("hook output surfaces: got %q", got.Detail)
+	}
+}
+
+// The push still runs after a failed commit (gitwatch parity), but its result
+// must not mask the commit failure: the menu/status row has to say "commit
+// failing", not "pushed".
+func TestFailingCommitIsStillReportedWhenThePushSucceeds(t *testing.T) {
+	repo := newTestRepo(t)
+	origin := repo.addOrigin()
+	repo.write("seed.txt", "1")
+	autoCommit(repo.spec("-r", "origin", "-b", "main"))
+	repo.installFailingPreCommitHook("lint says no")
+	repo.write("a.txt", "2")
+	got := autoCommit(repo.spec("-r", "origin", "-b", "main"))
+	if got.Kind != CommitFailed {
+		t.Fatalf("expected commitFailed, got %+v", got)
+	}
+	if !strings.Contains(got.Detail, "lint says no") {
+		t.Errorf("hook output surfaces: got %q", got.Detail)
+	}
+	if origin.commitCount() != 1 || repo.commitCount() != 1 {
+		t.Error("the blocked commit never happened, and the push had nothing new to send")
+	}
+}
+
+func TestRebaseConflictIsReportedAndLeftInProgress(t *testing.T) {
+	repo := newTestRepo(t)
+	origin := repo.addOrigin()
+	repo.write("shared.txt", "original\n")
+	autoCommit(repo.spec("-r", "origin", "-b", "main"))
+	repo.trackOrigin()
+
+	colleague := newCloneOf(t, origin) // someone else pushes first
+	colleague.write("shared.txt", "colleague's version\n")
+	autoCommit(colleague.spec("-r", "origin", "-b", "main"))
+
+	repo.write("shared.txt", "our conflicting version\n")
+	got := autoCommit(repo.spec("-r", "origin", "-b", "main", "-R"))
+	if got.Kind != RebaseConflict {
+		t.Fatalf("expected rebaseConflict, got %+v", got)
+	}
+	// gitwatch parity: no abort. The conflicted rebase is left in progress
+	// for the user to resolve; we only make it visible in status.
+	if !repo.midRebase() {
+		t.Error("the conflicted rebase is left in progress")
+	}
+}
+
+// Differential parity tests: the same scenario runs through upstream
+// gitwatch.sh (the model) and through our engine, each on its own
+// identically-built world, and the observable git state afterwards must be
+// identical. Scenario setup uses only plain git commands, so neither
+// implementation touches the world until the measured cycle.
+//
+// Determinism: gitwatch's -f performs one commit cycle before entering its
+// watch loop, and GW_INW_BIN lets us point the watcher at a stub that exits
+// immediately, so the script does exactly one cycle and terminates. Every
+// scenario passes an explicit -m without %d, since default messages and
+// timestamps intentionally differ.
+
+// Everything a user could observe about a world after one cycle.
+type repoState struct {
+	commitCount       int
+	lastMessage       string
+	pendingChanges    int
+	branch            string
+	midMerge          bool
+	midRebase         bool
+	remoteCommitCount int // -1 when the scenario has no remote
+	remoteLastMessage string
+}
+
+func (s repoState) String() string {
+	return fmt.Sprintf("commits=%d last=%q pending=%d branch=%s midMerge=%v midRebase=%v remote(commits=%d last=%q)",
+		s.commitCount, s.lastMessage, s.pendingChanges, s.branch,
+		s.midMerge, s.midRebase, s.remoteCommitCount, s.remoteLastMessage)
+}
+
+func stateOf(repo *testRepo, remote *bareRemote) repoState {
+	s := repoState{
+		commitCount:       repo.commitCount(),
+		lastMessage:       repo.lastMessage(),
+		pendingChanges:    pendingCount(repo.path, ""),
+		branch:            currentBranch(repo.path, ""),
+		midMerge:          repo.midMerge(),
+		midRebase:         repo.midRebase(),
+		remoteCommitCount: -1,
+	}
+	if remote != nil {
+		s.remoteCommitCount = remote.commitCount()
+		s.remoteLastMessage = remote.lastMessage()
+	}
+	return s
+}
+
+// The upstream script, vendored once for the whole repo in the macOS test
+// suite; both implementations measure themselves against that same copy.
+func gitwatchScript(t *testing.T) string {
+	t.Helper()
+	wd, _ := os.Getwd()
+	script := filepath.Join(wd, "..", "macos", "Tests", "Reference", "gitwatch.sh")
+	if _, err := os.Stat(script); err != nil {
+		t.Fatalf("vendored gitwatch.sh not found at %s", script)
+	}
+	return script
+}
+
+// A watcher stub that exits immediately: gitwatch runs its -f startup
+// commit, the watch pipe hits EOF, and the script terminates.
+func stubWatcher(t *testing.T) string {
+	t.Helper()
+	stub := filepath.Join(t.TempDir(), "inotifywait")
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return stub
+}
+
+// Run upstream gitwatch for exactly one commit cycle on `target`.
+func runOneCycle(t *testing.T, flags []string, target string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	args := append([]string{gitwatchScript(t), "-f"}, flags...)
+	args = append(args, target)
+	cmd := exec.CommandContext(ctx, "bash", args...)
+	cmd.Env = append(os.Environ(), "GW_INW_BIN="+stubWatcher(t))
+	cmd.Run() // fire-and-forget, like gitwatch itself
+}
+
+// Build two identical worlds, run the model on one and our engine on the
+// other with the same flags, and return both fingerprints.
+func twins(t *testing.T, flags []string, withRemote bool, targetSuffix string,
+	setup func(*testRepo, *bareRemote)) (model, ours repoState) {
+	t.Helper()
+	target := func(repo *testRepo) string {
+		if targetSuffix != "" {
+			return filepath.Join(repo.path, targetSuffix)
+		}
+		return repo.path
+	}
+
+	a := newTestRepo(t)
+	var ra *bareRemote
+	if withRemote {
+		ra = a.addOrigin()
+	}
+	setup(a, ra)
+	runOneCycle(t, flags, target(a))
+	model = stateOf(a, ra)
+
+	b := newTestRepo(t)
+	var rb *bareRemote
+	if withRemote {
+		rb = b.addOrigin()
+	}
+	setup(b, rb)
+	spec, errMsg := parseRepoSpec(append(flags, target(b)))
+	if spec == nil {
+		t.Fatal(errMsg)
+	}
+	autoCommit(spec)
+	ours = stateOf(b, rb)
+	return model, ours
+}
+
+func expectParity(t *testing.T, model, ours repoState) {
+	t.Helper()
+	if model != ours {
+		t.Errorf("state diverged\n  gitwatch: %v\n  ours:     %v", model, ours)
+	}
+}
+
+// Plain-git scenario builders (no engine involvement).
+func seed(repo *testRepo) {
+	repo.write("seed.txt", "seed\n")
+	repo.git("add", "-A")
+	repo.git("commit", "-q", "-m", "seed")
+}
+
+func seedAndPush(repo *testRepo) {
+	seed(repo)
+	repo.git("push", "-q", "origin", "main")
+	repo.trackOrigin()
+}
+
+func colleaguePushes(t *testing.T, remote *bareRemote, file, message string) {
+	colleague := newCloneOf(t, remote)
+	colleague.write(file, "from the other machine\n")
+	colleague.git("add", "-A")
+	colleague.git("commit", "-q", "-m", message)
+	colleague.git("push", "-q", "origin", "main")
+}
+
+func TestParityCleanRepo(t *testing.T) {
+	model, ours := twins(t, []string{"-m", "cycle"}, false, "", func(repo *testRepo, _ *bareRemote) {
+		seed(repo)
+	})
+	expectParity(t, model, ours)
+	if ours.commitCount != 1 {
+		t.Errorf("neither side commits anything: %v", ours)
+	}
+}
+
+func TestParityPlainCommit(t *testing.T) {
+	model, ours := twins(t, []string{"-m", "cycle"}, false, "", func(repo *testRepo, _ *bareRemote) {
+		seed(repo)
+		repo.write("notes.txt", "hello\n")
+	})
+	expectParity(t, model, ours)
+	if ours.commitCount != 2 || ours.lastMessage != "cycle" || ours.pendingChanges != 0 {
+		t.Errorf("same commit, same message, clean tree afterwards: %v", ours)
+	}
+}
+
+// Sharp corner, kept for upstream parity: -d passes to date(1) raw and only
+// the first %d is spliced. The year-only format keeps the spliced date
+// identical across the two runs, so the fingerprints compare exactly.
+func TestParitySharpCornerRawDateFormatAndFirstTokenOnly(t *testing.T) {
+	model, ours := twins(t, []string{"-m", "at %d then %d", "-d", "+%Y"}, false, "",
+		func(repo *testRepo, _ *bareRemote) {
+			seed(repo)
+			repo.write("notes.txt", "hello\n")
+		})
+	expectParity(t, model, ours)
+	if !strings.HasPrefix(ours.lastMessage, "at 2") || !strings.HasSuffix(ours.lastMessage, " then %d") {
+		t.Errorf("got %q", ours.lastMessage)
+	}
+}
+
+func TestParityPushToRemote(t *testing.T) {
+	model, ours := twins(t, []string{"-m", "cycle", "-r", "origin", "-b", "main"}, true, "",
+		func(repo *testRepo, _ *bareRemote) {
+			seedAndPush(repo)
+			repo.write("notes.txt", "hello\n")
+		})
+	expectParity(t, model, ours)
+	if ours.remoteCommitCount != 2 || ours.remoteLastMessage != "cycle" {
+		t.Errorf("both push the commit: %v", ours)
+	}
+}
+
+func TestParityUnreachableRemote(t *testing.T) {
+	model, ours := twins(t, []string{"-m", "cycle", "-r", "origin", "-b", "main"}, true, "",
+		func(repo *testRepo, _ *bareRemote) {
+			seed(repo)
+			repo.setOriginURL(filepath.Join(t.TempDir(), "gone.git"))
+			repo.write("notes.txt", "hello\n")
+		})
+	expectParity(t, model, ours)
+	if ours.commitCount != 2 {
+		t.Error("fire-and-forget: the commit still happens")
+	}
+}
+
+// Upstream runs the pull and the push after `git commit` whether or not the
+// commit succeeded, so a repo whose commit a hook blocks still pushes what is
+// already committed. The seed here is deliberately left unpushed, which is what
+// lets the two worlds disagree if we ever short-circuit on a failed commit.
+func TestParityFailedCommitStillPushes(t *testing.T) {
+	model, ours := twins(t, []string{"-m", "cycle", "-r", "origin", "-b", "main"}, true, "",
+		func(repo *testRepo, _ *bareRemote) {
+			seed(repo) // committed locally, never pushed
+			repo.installFailingPreCommitHook("lint says no")
+			repo.write("notes.txt", "hello\n")
+		})
+	expectParity(t, model, ours)
+	if ours.remoteCommitCount != 1 {
+		t.Errorf("the already-committed seed reaches the remote on both sides: %v", ours)
+	}
+	if ours.commitCount != 1 || ours.pendingChanges == 0 {
+		t.Errorf("the hook blocked the new commit on both sides: %v", ours)
+	}
+}
+
+func TestParityMergeGuard(t *testing.T) {
+	model, ours := twins(t, []string{"-m", "cycle", "-M"}, false, "", func(repo *testRepo, _ *bareRemote) {
+		repo.conflictedMerge()
+	})
+	expectParity(t, model, ours)
+	if !ours.midMerge {
+		t.Error("the merge is left untouched on both sides")
+	}
+}
+
+func TestParityMergeCommittedWithoutGuard(t *testing.T) {
+	model, ours := twins(t, []string{"-m", "cycle"}, false, "", func(repo *testRepo, _ *bareRemote) {
+		repo.conflictedMerge()
+	})
+	expectParity(t, model, ours)
+	if ours.midMerge {
+		t.Error("the cycle concluded the merge on both sides")
+	}
+}
+
+func TestParityRebaseHappyPath(t *testing.T) {
+	model, ours := twins(t, []string{"-m", "cycle", "-r", "origin", "-b", "main", "-R"}, true, "",
+		func(repo *testRepo, remote *bareRemote) {
+			seedAndPush(repo)
+			colleaguePushes(t, remote, "theirs.txt", "made elsewhere")
+			repo.write("ours.txt", "made here\n")
+		})
+	expectParity(t, model, ours)
+	if ours.remoteCommitCount != 3 {
+		t.Error("seed, theirs, ours: one linear history")
+	}
+	if ours.remoteLastMessage != "cycle" {
+		t.Errorf("got %q", ours.remoteLastMessage)
+	}
+}
+
+func TestParitySubdirectoryTarget(t *testing.T) {
+	model, ours := twins(t, []string{"-m", "cycle"}, false, "sub", func(repo *testRepo, _ *bareRemote) {
+		repo.write("sub/inner.txt", "v1\n")
+		repo.git("add", "-A")
+		repo.git("commit", "-q", "-m", "seed")
+		repo.write("sub/inner.txt", "v2\n")
+		repo.write("outer.txt", "left alone\n")
+	})
+	expectParity(t, model, ours)
+	if ours.commitCount != 2 || ours.pendingChanges != 1 {
+		t.Errorf("outer.txt stays uncommitted on both sides: %v", ours)
+	}
+}
+
+func TestParityFileTarget(t *testing.T) {
+	model, ours := twins(t, []string{"-m", "cycle"}, false, "a.txt", func(repo *testRepo, _ *bareRemote) {
+		repo.write("a.txt", "v1\n")
+		repo.git("add", "-A")
+		repo.git("commit", "-q", "-m", "seed")
+		repo.write("a.txt", "v2\n")
+		repo.write("b.txt", "left alone\n")
+	})
+	expectParity(t, model, ours)
+	if ours.commitCount != 2 || ours.pendingChanges != 1 {
+		t.Errorf("b.txt stays uncommitted on both sides: %v", ours)
+	}
+}
+
+func TestParityRebaseConflictLeftInProgress(t *testing.T) {
+	model, ours := twins(t, []string{"-m", "cycle", "-r", "origin", "-b", "main", "-R"}, true, "",
+		func(repo *testRepo, remote *bareRemote) {
+			seedAndPush(repo)
+			colleaguePushes(t, remote, "seed.txt", "conflicting edit")
+			repo.write("seed.txt", "our conflicting edit\n")
+		})
+	expectParity(t, model, ours)
+	if !ours.midRebase {
+		t.Error("both sides stop mid-rebase; -M is the only guard")
+	}
+}

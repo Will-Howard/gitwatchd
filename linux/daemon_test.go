@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -10,9 +11,46 @@ import (
 	"time"
 )
 
-// End-to-end through the real binary: config written by the CLI, daemon
-// started detached, inotify driving commits, live config reload, and a clean
-// stop. One flow, because this is exactly the session a user has.
+// The built gitwatchd binary, for tests that exercise the real daemon.
+var testBinary string
+
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "gitwatchd-bin")
+	if err == nil {
+		bin := filepath.Join(dir, "gitwatchd")
+		build := exec.Command("go", "build", "-o", bin, ".")
+		build.Stderr = os.Stderr
+		if build.Run() == nil {
+			testBinary = bin
+		}
+	}
+	code := m.Run()
+	if dir != "" {
+		os.RemoveAll(dir)
+	}
+	os.Exit(code)
+}
+
+func runCLI(env []string, args ...string) (int, string) {
+	cmd := exec.Command(testBinary, args...)
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	code := 0
+	if exit, ok := err.(*exec.ExitError); ok {
+		code = exit.ExitCode()
+	} else if err != nil {
+		code = -1
+	}
+	return code, strings.TrimSpace(string(out))
+}
+
+func isolatedEnv(home string) []string {
+	return append(os.Environ(),
+		"HOME="+home,
+		"GITWATCHD_CONFIG="+filepath.Join(home, ".gitwatchd"),
+		"GITWATCHD_STATE_DIR="+filepath.Join(home, "state"),
+		"GITWATCHD_NO_SPAWN=1")
+}
 
 func TestDaemonEndToEnd(t *testing.T) {
 	if testBinary == "" {
@@ -53,15 +91,12 @@ func TestDaemonEndToEnd(t *testing.T) {
 		t.Errorf("status should show the watched row:\n%s", out)
 	}
 
-	// Live reload: adding a second repo while the daemon runs starts
-	// watching it without a restart.
 	second := newTestRepo(t)
 	if code, out := runCLI(env, "add", "-s", "0", second.path); code != 0 {
 		t.Fatalf("second add failed: %s", out)
 	}
 	waitForDaemonPickup(t, second, func() { second.write("more.txt", "hi\n") })
 
-	// Pause stops commits; resume catches up on what piled up meanwhile.
 	if code, out := runCLI(env, "pause", repo.path); code != 0 {
 		t.Fatalf("pause failed: %s", out)
 	}
@@ -159,5 +194,118 @@ func killDaemonIfRunning(home string) {
 	}
 	if pid, _ := strconv.Atoi(strings.TrimSpace(string(raw))); pid > 0 {
 		syscall.Kill(pid, syscall.SIGKILL)
+	}
+}
+
+func startWatcher(t *testing.T, spec *RepoSpec) *repoWatcher {
+	t.Helper()
+	w, err := newRepoWatcher(spec, func(string, *RepoStatus) {}, func(string, ...any) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(w.stopWatching)
+	return w
+}
+
+func waitFor(t *testing.T, timeout time.Duration, what string, ok func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if ok() {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
+}
+
+func TestWatcherCommitsAfterTheSettleWindow(t *testing.T) {
+	repo := newTestRepo(t)
+	startWatcher(t, repo.spec("-s", "0.2"))
+	repo.write("notes.txt", "hello\n")
+	waitFor(t, 10*time.Second, "the auto-commit", func() bool { return repo.commitCount() == 1 })
+}
+
+func TestWatcherIgnoresItsOwnGitChurn(t *testing.T) {
+	repo := newTestRepo(t)
+	startWatcher(t, repo.spec("-s", "0.2"))
+	repo.write("notes.txt", "hello\n")
+	waitFor(t, 10*time.Second, "the auto-commit", func() bool { return repo.commitCount() == 1 })
+	// The commit itself churns .git; a retrigger loop would commit again
+	// (or spin). Nothing should happen now.
+	time.Sleep(1 * time.Second)
+	if repo.commitCount() != 1 {
+		t.Errorf("commits = %d, the watcher retriggered on .git churn", repo.commitCount())
+	}
+}
+
+func TestWatcherHonorsExcludes(t *testing.T) {
+	repo := newTestRepo(t)
+	startWatcher(t, repo.spec("-s", "0.2", "-x", `\.log$`))
+	repo.write("debug.log", "noise\n")
+	time.Sleep(1 * time.Second)
+	if repo.commitCount() != 0 {
+		t.Error("an excluded change must not trigger a cycle")
+	}
+	// A non-excluded change still commits (and sweeps in the .log file,
+	// exactly like gitwatch: -x filters events, not git add).
+	repo.write("notes.txt", "hello\n")
+	waitFor(t, 10*time.Second, "the auto-commit", func() bool { return repo.commitCount() == 1 })
+}
+
+func TestWatcherSeesNewSubdirectories(t *testing.T) {
+	repo := newTestRepo(t)
+	startWatcher(t, repo.spec("-s", "0.2"))
+	os.MkdirAll(filepath.Join(repo.path, "fresh", "deep"), 0o755)
+	time.Sleep(500 * time.Millisecond) // let the new subtree's watches land
+	repo.write("fresh/deep/inner.txt", "made inside a new directory\n")
+	waitFor(t, 10*time.Second, "a commit from inside the new subtree", func() bool {
+		return repo.commitCount() == 1 && pendingCount(repo.path, "") == 0
+	})
+}
+
+func TestWatcherFileTargetSurvivesAtomicSaves(t *testing.T) {
+	repo := newTestRepo(t)
+	repo.write("a.txt", "v1\n")
+	autoCommit(repo.spec())
+	repo.write("b.txt", "not watched\n")
+
+	spec, _ := parseRepoSpec([]string{"-s", "0.2", filepath.Join(repo.path, "a.txt")})
+	startWatcher(t, spec)
+
+	// An editor-style atomic save: write a temp file, rename over the target.
+	tmp := filepath.Join(repo.path, "a.txt.tmp")
+	os.WriteFile(tmp, []byte("v2\n"), 0o644)
+	os.Rename(tmp, filepath.Join(repo.path, "a.txt"))
+	waitFor(t, 10*time.Second, "the file-target commit", func() bool { return repo.commitCount() == 2 })
+	if pendingCount(repo.path, "") != 1 {
+		t.Error("b.txt stays uncommitted, only the file target is committed")
+	}
+}
+
+func TestWatcherFlushNowCommitsWithoutEvents(t *testing.T) {
+	repo := newTestRepo(t)
+	repo.write("pending.txt", "already here\n")
+	w := startWatcher(t, repo.spec("-s", "0.2"))
+	w.flushNow() // what -f and a resume catch-up do
+	waitFor(t, 10*time.Second, "the flush commit", func() bool { return repo.commitCount() == 1 })
+}
+
+func TestWatchLimitExhaustionSurfacesAsRepoState(t *testing.T) {
+	repo := newTestRepo(t)
+	var published *RepoStatus
+	w, err := newRepoWatcher(repo.spec("-s", "0.2"),
+		func(_ string, s *RepoStatus) { published = s }, func(string, ...any) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(w.stopWatching)
+	w.addWatchError("/some/dir", syscall.ENOSPC)
+	w.publish()
+	if published == nil || published.ErrorLabel != "watch failing" {
+		t.Fatalf("got %+v", published)
+	}
+	if !strings.Contains(published.Detail, "max_user_watches") {
+		t.Errorf("the fix should be named: %q", published.Detail)
 	}
 }
