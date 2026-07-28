@@ -54,8 +54,14 @@ enum RepoSpecParser {
     /// Parse a gitwatch-style argument list into a RepoSpec.
     /// Returns nil + an error message if there's no valid target.
     static func parse(_ args: [String]) -> (spec: RepoSpec?, error: String?) {
+        let parsed = parse(args, invokedFrom: FileManager.default.currentDirectoryPath)
+        return (parsed.spec, parsed.error)
+    }
+
+    static func parse(_ args: [String], invokedFrom directory: String)
+        -> (spec: RepoSpec?, error: String?, resolved: [String]) {
         var spec = RepoSpec(path: "")
-        var target: String? = nil
+        var target: (token: String, index: Int)? = nil
         var i = 0
         func next() -> String? { i += 1; return i < args.count ? args[i] : nil }
 
@@ -64,7 +70,7 @@ enum RepoSpecParser {
             switch a {
             case "-s":
                 guard let v = next(), let d = Double(v), d >= 0 else {
-                    return (nil, "-s needs a number of seconds, 0 or more")
+                    return (nil, "-s needs a number of seconds, 0 or more", args)
                 }
                 spec.settle = d
             case "-d": if let v = next() { spec.dateFormat = v }
@@ -76,13 +82,13 @@ enum RepoSpecParser {
             case "-C": spec.pipeChangedFiles = true // boolean: takes no argument
             case "-l", "-L":
                 guard let v = next(), let n = Int(v), n >= 0 else {
-                    return (nil, "\(a) needs a number of lines, 0 or more")
+                    return (nil, "\(a) needs a number of lines, 0 or more", args)
                 }
                 spec.listChanges = n
                 if a == "-L" { spec.listChangesColor = false }
             case "-x":
                 guard let v = next(), (try? NSRegularExpression(pattern: v)) != nil else {
-                    return (nil, "-x needs a valid regular expression")
+                    return (nil, "-x needs a valid regular expression", args)
                 }
                 spec.exclude = v
             case "-M": spec.noMergeCommit = true
@@ -93,22 +99,23 @@ enum RepoSpecParser {
             case "--paused": spec.paused = true // gitwatchd extension (see RepoSpec)
             default:
                 if a.hasPrefix("-") {
-                    return (nil, "unknown flag \(a)")
+                    return (nil, "unknown flag \(a)", args)
                 } else {
-                    target = a // last bare arg wins as the target
+                    target = (a, i) // last bare arg wins as the target
                 }
             }
             i += 1
         }
 
-        guard let t = target else { return (nil, "no target path given") }
-        spec.path = (t as NSString).expandingTildeInPath
+        guard let target else { return (nil, "no target path given", args) }
+        spec.path = (target.token as NSString).expandingTildeInPath
         if !(spec.path as NSString).isAbsolutePath {
-            spec.path = (FileManager.default.currentDirectoryPath as NSString)
-                .appendingPathComponent(spec.path)
+            spec.path = (directory as NSString).appendingPathComponent(spec.path)
         }
         spec.path = (spec.path as NSString).standardizingPath
-        return (spec, nil)
+        var resolved = args
+        resolved[target.index] = spec.path
+        return (spec, nil, resolved)
     }
 
     /// The -d value goes to date(1) verbatim, as upstream: formats need a

@@ -48,6 +48,36 @@ struct CLIContract {
         }
     }
 
+    @Test("`gitwatchd .` persists the repo it was run in, not the dot")
+    func addResolvesRelativeTarget() {
+        withTemporaryConfig {
+            let repo = TestRepo()
+            #expect(CLI.run(["."], invokedFrom: repo.path) == 0)
+            #expect(Config.rawLines() == [repo.path])
+            #expect(Config.specs()[0].path == repo.path,
+                    "the daemon watches that repo, wherever it reads the config from")
+        }
+    }
+
+    @Test("a tilde target expands and an absolute target survives unchanged")
+    func targetResolutionForms() {
+        let elsewhere = TestDirs.root
+        #expect(RepoSpecParser.parse(["~/code"], invokedFrom: elsewhere).resolved
+                == [(NSHomeDirectory() as NSString).appendingPathComponent("code")])
+        #expect(RepoSpecParser.parse(["/tmp/x"], invokedFrom: elsewhere).resolved == ["/tmp/x"])
+    }
+
+    @Test("an invocation with no target is rejected as before, its args untouched")
+    func addWithoutTarget() {
+        withTemporaryConfig {
+            #expect(CLI.run(["add", "-s", "5"], invokedFrom: TestDirs.root) == 1)
+            #expect(Config.rawLines().isEmpty)
+        }
+        let parsed = RepoSpecParser.parse(["-s", "5"], invokedFrom: TestDirs.root)
+        #expect(parsed.error == "no target path given")
+        #expect(parsed.resolved == ["-s", "5"])
+    }
+
     @Test("adding the same repo twice fails and leaves one entry")
     func duplicateAdd() {
         withTemporaryConfig {
