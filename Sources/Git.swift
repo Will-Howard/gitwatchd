@@ -34,6 +34,10 @@ enum CommitOutcome: Equatable {
     }
 }
 
+/// Kill timers for spawned children. Not DispatchQueue.global(): it is
+/// non-overcommit, and the blocked callers these timers guard can starve it.
+let spawnWatchdogQueue = DispatchQueue(label: "gitwatchd.spawn-watchdog")
+
 /// Run a program and capture stdout+stderr, trimmed. `timeout` terminates a
 /// hung child.
 @discardableResult
@@ -49,7 +53,7 @@ func runProcess(_ exe: String, _ args: [String], env: [String: String]? = nil,
     p.standardError = pipe
     do { try p.run() } catch { return (-1, "\(error)") }
     if let timeout {
-        DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+        spawnWatchdogQueue.asyncAfter(deadline: .now() + timeout) {
             if p.isRunning { p.terminate() }
         }
     }
@@ -282,13 +286,14 @@ enum Git {
         }
         do { try p.run() } catch { return "" }
 
-        // Feed stdin from a background thread while we drain stdout here, so a
-        // command that never reads (or one like cat with a payload past the
-        // pipe buffer) can neither deadlock the repo queue nor, with SIGPIPE
+        // Feed stdin from a dedicated thread (a starvable queue would deadlock
+        // us here, see spawnWatchdogQueue) while we drain stdout, so a command
+        // that never reads (or one like cat with a payload past the pipe
+        // buffer) can neither deadlock the repo queue nor, with SIGPIPE
         // ignored, crash on a broken pipe.
         let fed = DispatchSemaphore(value: 0)
         if let feedHandle {
-            DispatchQueue.global().async {
+            Thread.detachNewThread {
                 let fd = feedHandle.fileDescriptor
                 feedData.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
                     guard let base = raw.baseAddress else { return }

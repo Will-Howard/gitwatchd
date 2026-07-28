@@ -56,7 +56,7 @@ enum GitRuntime {
             return (ProcessInfo.processInfo.environment, "couldn't launch login shell: \(shell)")
         }
         // Guard against a slow/hanging rc file: kill after 5s and fall back.
-        DispatchQueue.global().asyncAfter(deadline: .now() + 5) { if proc.isRunning { proc.terminate() } }
+        spawnWatchdogQueue.asyncAfter(deadline: .now() + 5) { if proc.isRunning { proc.terminate() } }
         let data = out.fileHandleForReading.readDataToEndOfFile()
         proc.waitUntilExit()
         let text = String(data: data, encoding: .utf8) ?? ""
