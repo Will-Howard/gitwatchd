@@ -70,10 +70,6 @@ type repoWatcher struct {
 	logf    func(format string, args ...any)
 }
 
-// The headless daemon: one process, one flock-guarded pidfile, a watcher per
-// configured repo, and a live reload whenever ~/.gitwatchd changes. Under
-// systemd its stdout/stderr go to the journal; that is the log.
-
 func runDaemon() int {
 	lock, err := acquireDaemonLock()
 	if err != nil {
@@ -225,7 +221,6 @@ func uint32frombytes(b []byte) uint32 {
 }
 
 // Single-instance guard: the daemon holds an exclusive flock on the pidfile
-// for its whole life, so liveness checks can't be fooled by stale pids.
 func acquireDaemonLock() (*os.File, error) {
 	os.MkdirAll(stateDir(), 0o755)
 	f, err := os.OpenFile(pidfilePath(), os.O_RDWR|os.O_CREATE, 0o644)
