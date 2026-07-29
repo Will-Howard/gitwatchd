@@ -1072,7 +1072,7 @@ func autostartStatus() int {
 // setting on every start, so an installed gitwatchd ends up running at boot
 // without anyone asking for it.
 
-// install.sh and `make uninstall` know three destinations; a binary anywhere
+// `make install` and `make uninstall` know three destinations; a binary anywhere
 // else (a build directory, a checkout) is a development copy, which onboarding
 // leaves alone along with the record.
 func isInstalledBinary(exe string) bool {
