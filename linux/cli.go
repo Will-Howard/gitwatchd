@@ -463,15 +463,39 @@ func cliStop() int {
 
 	// Wait for the exit so `gitwatchd stop && gitwatchd start` doesn't race
 	// the old process.
-	for i := 0; i < 50 && isDaemonRunning(); i++ {
-		time.Sleep(100 * time.Millisecond)
+	if waitForDaemonExit(5 * time.Second) {
+		fmt.Println("✓ daemon stopped")
+		return 0
 	}
-	if isDaemonRunning() {
-		warn("daemon did not exit; force with: pkill -x gitwatchd")
+
+	// `stop` has to end with the daemon stopped, so a process that ignores
+	// SIGTERM (wedged in a git call, say) gets SIGKILL rather than advice.
+	pid := daemonPid()
+	if pid <= 0 {
+		warn("daemon did not exit and its pidfile names no process to kill")
 		return 1
 	}
-	fmt.Println("✓ daemon stopped")
+	syscall.Kill(pid, syscall.SIGKILL)
+	if !waitForDaemonExit(2 * time.Second) {
+		warn(fmt.Sprintf("daemon (pid %d) survived SIGKILL", pid))
+		return 1
+	}
+	fmt.Println("✓ daemon stopped (it ignored the stop signal, so it was killed)")
 	return 0
+}
+
+// Poll until the daemon has released its lock, or the timeout runs out.
+func waitForDaemonExit(timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if !isDaemonRunning() {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 func spawnDaemon() error {
@@ -957,9 +981,7 @@ WantedBy=default.target
 	if isDaemonRunning() && !unitActive() {
 		if pid := daemonPid(); pid > 0 {
 			syscall.Kill(pid, syscall.SIGTERM)
-			for i := 0; i < 50 && isDaemonRunning(); i++ {
-				time.Sleep(100 * time.Millisecond)
-			}
+			waitForDaemonExit(5 * time.Second)
 		}
 	}
 	if code, out := systemctlUser("enable", "--now", "gitwatchd"); code != 0 {

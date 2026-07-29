@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -15,6 +16,9 @@ import (
 var testBinary string
 
 func TestMain(m *testing.M) {
+	if os.Getenv(stubbornDaemonEnv) != "" {
+		holdTheDaemonLockIgnoringSIGTERM()
+	}
 	dir, err := os.MkdirTemp("", "gitwatchd-bin")
 	if err == nil {
 		bin := filepath.Join(dir, "gitwatchd")
@@ -170,6 +174,56 @@ func TestAddSpawnsTheDaemon(t *testing.T) {
 	}
 	if err := syscall.Kill(pid, 0); err == nil {
 		t.Errorf("the spawned daemon (pid %d) is still alive after stop", pid)
+	}
+}
+
+// A daemon that will not go away on SIGTERM: this same test binary
+// re-executed, holding the pidfile lock `gitwatchd stop` reads the daemon's
+// liveness from.
+const stubbornDaemonEnv = "GITWATCHD_TEST_STUBBORN_DAEMON"
+
+func holdTheDaemonLockIgnoringSIGTERM() {
+	signal.Ignore(syscall.SIGTERM)
+	os.MkdirAll(stateDir(), 0o755)
+	f, err := os.OpenFile(pidfilePath(), os.O_RDWR|os.O_CREATE, 0o644)
+	if err != nil || syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) != nil {
+		os.Exit(1)
+	}
+	f.Truncate(0)
+	f.WriteAt([]byte(strconv.Itoa(os.Getpid())+"\n"), 0)
+	time.Sleep(60 * time.Second) // outlives the test; stop is meant to end this
+	os.Exit(0)
+}
+
+func TestStopKillsADaemonThatIgnoresSIGTERM(t *testing.T) {
+	if testBinary == "" {
+		t.Fatal("test binary did not build")
+	}
+	home := t.TempDir()
+	stubborn := exec.Command(os.Args[0])
+	stubborn.Env = append(isolatedEnv(home), stubbornDaemonEnv+"=1")
+	if err := stubborn.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { stubborn.Process.Kill() })
+	// The pid is written after the lock is taken, so a pid means it is held.
+	waitFor(t, 10*time.Second, "the stubborn daemon to take the lock", func() bool {
+		return daemonPidIn(home) > 0
+	})
+
+	code, out := runCLI(isolatedEnv(home), "stop")
+	if code != 0 {
+		t.Fatalf("stop must still succeed: code=%d out=%s", code, out)
+	}
+	if !strings.Contains(out, "✓ daemon stopped") || !strings.Contains(out, "ignored the stop signal") {
+		t.Errorf("stop must say what it took to stop it:\n%s", out)
+	}
+	exit, killed := stubborn.Wait().(*exec.ExitError)
+	if !killed {
+		t.Fatal("the stubborn daemon outlived stop")
+	}
+	if status, ok := exit.Sys().(syscall.WaitStatus); !ok || status.Signal() != syscall.SIGKILL {
+		t.Errorf("expected SIGKILL, got %v", exit)
 	}
 }
 
