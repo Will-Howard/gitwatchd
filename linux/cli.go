@@ -297,7 +297,7 @@ func cliStatus() int {
 	}
 	daemonErrors := map[string]RepoStatus{}
 	if running {
-		daemonErrors = stateErrors()
+		daemonErrors = daemonState.statuses()
 	}
 	repos := "repos"
 	if len(specs) == 1 {

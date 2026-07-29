@@ -342,8 +342,8 @@ func TestWatchLimitExhaustionSurfacesAsRepoState(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(w.stopWatching)
-	w.addWatchError("/some/dir", syscall.ENOSPC)
-	w.publish()
+	w.recordWatchFailure("/some/dir", syscall.ENOSPC)
+	w.publishStatus()
 	if published == nil || published.ErrorLabel != "watch failing" {
 		t.Fatalf("got %+v", published)
 	}
