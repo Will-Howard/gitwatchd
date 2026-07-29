@@ -2,9 +2,7 @@
 
 `gitwatch.sh` is a verbatim copy of upstream gitwatch, used as the model in the
 differential parity tests of both implementations
-(`macos/Tests/ParityTests.swift` and `linux/gitwatch_parity_test.go`): the same
-scenario runs through this script and through our engine, and the resulting git
-state must be identical.
+(`macos/Tests/ParityTests.swift` and `linux/gitwatch_parity_test.go`).
 
 - Source: https://raw.githubusercontent.com/gitwatch/gitwatch/master/gitwatch.sh
 - Fetched: 2026-07-18
