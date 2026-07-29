@@ -645,10 +645,6 @@ func configAppend(line string) {
 	os.WriteFile(configPath(), []byte(text), 0o644)
 }
 
-// True if `spec` is the repo the user means by `nameOrPath`: its folder name,
-// or its path in any form add accepts (absolute, tilde, or relative to the
-// working directory); the literal comparison also serves hand-edited configs,
-// whose stored path need not be one normalizePath would produce.
 func configMatches(spec *RepoSpec, nameOrPath string) bool {
 	return spec.Name() == nameOrPath || spec.Path == nameOrPath || spec.Path == normalizePath(nameOrPath)
 }
