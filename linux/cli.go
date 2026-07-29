@@ -645,8 +645,12 @@ func configAppend(line string) {
 	os.WriteFile(configPath(), []byte(text), 0o644)
 }
 
+// True if `spec` is the repo the user means by `nameOrPath`: its folder name,
+// or its path in any form add accepts (absolute, tilde, or relative to the
+// working directory); the literal comparison also serves hand-edited configs,
+// whose stored path need not be one normalizePath would produce.
 func configMatches(spec *RepoSpec, nameOrPath string) bool {
-	return spec.Path == expandTilde(nameOrPath) || spec.Name() == nameOrPath || spec.Path == nameOrPath
+	return spec.Name() == nameOrPath || spec.Path == nameOrPath || spec.Path == normalizePath(nameOrPath)
 }
 
 func configRemove(nameOrPath string) int {
@@ -673,10 +677,9 @@ func configRemove(nameOrPath string) int {
 	return removed
 }
 
-// Flip the --paused token on config lines matching `nameOrPath` (by full
-// path or repo name, like remove). Pause lives in the config, not daemon
-// state, so it survives daemon and machine restarts. Returns the number
-// of lines changed.
+// Flip the --paused token on config lines matching `nameOrPath` (as remove
+// matches). Pause lives in the config, not daemon state, so it survives
+// daemon and machine restarts. Returns the number of lines changed.
 func configSetPaused(nameOrPath string, paused bool) int {
 	raw, err := os.ReadFile(configPath())
 	if err != nil {
