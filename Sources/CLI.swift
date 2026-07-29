@@ -13,9 +13,9 @@ enum CLI {
         switch first {
         case "help", "-h", "--help": printUsage(); return 0
         case "version", "--version": print("gitwatchd \(version)"); return 0
-        case "rm", "remove":         return remove(Array(args.dropFirst()))
-        case "pause":                return setPaused(Array(args.dropFirst()), true)
-        case "resume":               return setPaused(Array(args.dropFirst()), false)
+        case "rm", "remove":         return remove(Array(args.dropFirst()), invokedFrom: directory)
+        case "pause":                return setPaused(Array(args.dropFirst()), true, invokedFrom: directory)
+        case "resume":               return setPaused(Array(args.dropFirst()), false, invokedFrom: directory)
         case "status":               return status()
         case "doctor":               return doctor()
         case "start":                return startDaemon()
@@ -59,9 +59,9 @@ enum CLI {
 
     // MARK: - rm
 
-    private static func remove(_ args: [String]) -> Int32 {
+    private static func remove(_ args: [String], invokedFrom directory: String) -> Int32 {
         guard let needle = args.first else { warn("usage: gitwatchd rm <name|path>"); return 1 }
-        let n = Config.remove(matching: needle)
+        let n = Config.remove(matching: needle, invokedFrom: directory)
         if n == 0 { warn("no watched repo matches \(needle)"); return 1 }
         ensureDaemonRunning()
         print("✓ stopped watching \(needle) (\(n) entr\(n == 1 ? "y" : "ies") removed)")
@@ -70,12 +70,12 @@ enum CLI {
 
     // MARK: - pause / resume
 
-    private static func setPaused(_ args: [String], _ paused: Bool) -> Int32 {
+    private static func setPaused(_ args: [String], _ paused: Bool, invokedFrom directory: String) -> Int32 {
         let verb = paused ? "pause" : "resume"
         guard let needle = args.first else { warn("usage: gitwatchd \(verb) <name|path>"); return 1 }
-        let n = Config.setPaused(matching: needle, paused: paused)
+        let n = Config.setPaused(matching: needle, paused: paused, invokedFrom: directory)
         guard n > 0 else {
-            let known = Config.specs().contains { Config.matches($0, needle) }
+            let known = Config.specs().contains { Config.matches($0, needle, invokedFrom: directory) }
             warn(known ? "\(needle) is already \(paused ? "paused" : "watching")"
                        : "no watched repo matches \(needle)")
             return 1

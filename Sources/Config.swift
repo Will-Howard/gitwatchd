@@ -84,23 +84,26 @@ enum Config {
         try? text.write(toFile: path, atomically: true, encoding: .utf8)
     }
 
-    /// True if `spec` is the repo the user means by `needle`: full path,
-    /// tilde path, or folder name.
-    static func matches(_ spec: RepoSpec, _ needle: String) -> Bool {
-        spec.path == (needle as NSString).expandingTildeInPath
-            || spec.name == needle || spec.path == needle
+    /// True if `spec` is the repo the user means by `needle`: its folder name,
+    /// or its path in any form `add` accepts (absolute, tilde, or relative to
+    /// `directory`).
+    static func matches(_ spec: RepoSpec, _ needle: String,
+                        invokedFrom directory: String = FileManager.default.currentDirectoryPath) -> Bool {
+        spec.name == needle || spec.path == needle
+            || spec.path == RepoSpecParser.resolve(needle, invokedFrom: directory)
     }
 
     /// Remove matching lines; returns how many were removed.
     @discardableResult
-    static func remove(matching needle: String) -> Int {
+    static func remove(matching needle: String,
+                       invokedFrom directory: String = FileManager.default.currentDirectoryPath) -> Int {
         guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return 0 }
         var removed = 0
         let kept = text.split(separator: "\n", omittingEmptySubsequences: false).filter { rawSub in
             let line = String(rawSub).trimmingCharacters(in: .whitespaces)
             if line.isEmpty || line.hasPrefix("#") { return true }
             guard let spec = RepoSpecParser.parse(tokenize(line)).spec else { return true }
-            let match = matches(spec, needle)
+            let match = matches(spec, needle, invokedFrom: directory)
             if match { removed += 1 }
             return !match
         }
@@ -108,12 +111,12 @@ enum Config {
         return removed
     }
 
-    /// Flip the --paused token on config lines matching `needle` (by full
-    /// path or repo name, like remove). Pause lives in the config, not app
-    /// state, so it survives daemon and computer restarts. Returns the number
-    /// of lines changed.
+    /// Flip the --paused token on config lines matching `needle` (as remove
+    /// matches). Pause lives in the config, not app state, so it survives
+    /// daemon and computer restarts. Returns the number of lines changed.
     @discardableResult
-    static func setPaused(matching needle: String, paused: Bool) -> Int {
+    static func setPaused(matching needle: String, paused: Bool,
+                          invokedFrom directory: String = FileManager.default.currentDirectoryPath) -> Int {
         guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return 0 }
         var changed = 0
         let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map { sub -> String in
@@ -121,7 +124,7 @@ enum Config {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             guard !trimmed.isEmpty, !trimmed.hasPrefix("#"),
                   let spec = RepoSpecParser.parse(tokenize(trimmed)).spec,
-                  matches(spec, needle),
+                  matches(spec, needle, invokedFrom: directory),
                   let rewritten = togglingPaused(line: trimmed, path: spec.path, paused: paused)
             else { return line }
             changed += 1
