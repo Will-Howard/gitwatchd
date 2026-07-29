@@ -30,6 +30,6 @@ esac
 
 echo ""
 echo "next steps:"
-echo "  gitwatchd <path-to-repo>   watch a repo"
-echo "  gitwatchd autostart on     run at boot (systemd user unit)"
+echo "  gitwatchd <path-to-repo>   watch a repo (turns on run-at-boot the first time)"
+echo "  gitwatchd autostart off    opt out of run at boot"
 echo "  gitwatchd status           see everything watched"
