@@ -302,37 +302,38 @@ func TestTokenizeRespectsQuotes(t *testing.T) {
 }
 
 // Autostart onboarding: what a daemon start does about autostart, given the
-// recorded wish, where the binary lives and whether systemd is here.
+// recorded wish, the daemon service's state and whether systemd is here.
 
 func TestAutostartDecisionTable(t *testing.T) {
-	installed := autostartConditions{installedBinary: true, systemdPresent: true}
 	cases := []struct {
 		what       string
 		conditions autostartConditions
 		want       autostartAction
 	}{
-		{"a development copy is never onboarded",
-			autostartConditions{systemdPresent: true}, autostartLeaveAlone},
-		{"a development copy is left alone even with a wish on record",
-			autostartConditions{recorded: true, wantsOn: true, systemdPresent: true}, autostartLeaveAlone},
-		{"the first installed run turns autostart on",
-			installed, autostartEnableFirstRun},
+		{"the first run turns autostart on",
+			autostartConditions{systemdPresent: true}, autostartEnableFirstRun},
 		{"a wish that is already satisfied needs nothing",
-			autostartConditions{installedBinary: true, systemdPresent: true,
-				recorded: true, wantsOn: true, unitEnabled: true}, autostartLeaveAlone},
-		{"a wanted unit that went missing is reinstated",
-			autostartConditions{installedBinary: true, systemdPresent: true,
+			autostartConditions{systemdPresent: true,
+				recorded: true, wantsOn: true, daemonServiceEnabled: true}, autostartLeaveAlone},
+		{"a wanted service that went missing is reinstated",
+			autostartConditions{systemdPresent: true,
 				recorded: true, wantsOn: true}, autostartReinstate},
+		{"a service pointing at another binary is reinstated",
+			autostartConditions{systemdPresent: true, recorded: true, wantsOn: true,
+				daemonServiceEnabled: true, serviceStale: true}, autostartReinstate},
 		{"an opt-out is never overridden",
-			autostartConditions{installedBinary: true, systemdPresent: true, recorded: true},
+			autostartConditions{systemdPresent: true, recorded: true},
 			autostartLeaveAlone},
-		{"the first installed run without systemd says so",
-			autostartConditions{installedBinary: true}, autostartReportUnavailable},
+		{"an opt-out beats a stale service",
+			autostartConditions{systemdPresent: true, recorded: true,
+				daemonServiceEnabled: true, serviceStale: true}, autostartLeaveAlone},
+		{"the first run without systemd says so",
+			autostartConditions{}, autostartReportUnavailable},
 		{"without systemd it says so once, not on every start",
-			autostartConditions{installedBinary: true, recorded: true, wantsOn: true},
+			autostartConditions{recorded: true, wantsOn: true},
 			autostartLeaveAlone},
 		{"an opt-out without systemd stays quiet",
-			autostartConditions{installedBinary: true, recorded: true}, autostartLeaveAlone},
+			autostartConditions{recorded: true}, autostartLeaveAlone},
 	}
 	for _, c := range cases {
 		if got := autostartActionFor(c.conditions); got != c.want {
@@ -363,19 +364,21 @@ func TestAutostartWishIsRecordedAsLaunchAtLogin(t *testing.T) {
 	}
 }
 
-func TestOnlyAnInstalledBinaryIsOnboarded(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	for _, dir := range []string{".local/bin", "bin", "build"} {
-		os.MkdirAll(filepath.Join(home, dir), 0o755)
+func TestDaemonServiceFollowsTheRunningBinary(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if daemonServicePointsAtThisBinary() {
+		t.Error("no service file at all cannot point at this binary")
 	}
-	for _, dir := range []string{".local/bin", "bin"} {
-		if !isInstalledBinary(filepath.Join(home, dir, "gitwatchd")) {
-			t.Errorf("%s is one of the install destinations", dir)
-		}
+	os.MkdirAll(filepath.Dir(daemonServicePath()), 0o755)
+	os.WriteFile(daemonServicePath(), []byte("[Service]\nExecStart=/somewhere/else/gitwatchd daemon\n"), 0o644)
+	if daemonServicePointsAtThisBinary() {
+		t.Error("a service file for another binary is stale")
 	}
-	if isInstalledBinary(filepath.Join(home, "build", "gitwatchd")) {
-		t.Error("a build directory holds a development copy")
+	exe, _ := os.Executable()
+	exe, _ = filepath.EvalSymlinks(exe)
+	os.WriteFile(daemonServicePath(), []byte("[Service]\nExecStart="+exe+" daemon\n"), 0o644)
+	if !daemonServicePointsAtThisBinary() {
+		t.Error("a service file for the running binary is current")
 	}
 }
 
