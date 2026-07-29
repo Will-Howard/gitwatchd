@@ -119,6 +119,37 @@ struct CLIContract {
         }
     }
 
+    @Test("`gitwatchd rm .` removes the repo it was run in")
+    func rmResolvesRelativeTarget() {
+        withTemporaryConfig {
+            let repo = TestRepo()
+            _ = CLI.run([repo.path])
+            #expect(CLI.run(["rm", "."], invokedFrom: repo.path) == 0)
+            #expect(Config.specs().isEmpty)
+        }
+    }
+
+    @Test("rm matches a relative path, resolved from the shell's directory")
+    func rmByRelativePath() {
+        withTemporaryConfig {
+            let repo = TestRepo()
+            _ = CLI.run([repo.path])
+            let parent = (repo.path as NSString).deletingLastPathComponent
+            #expect(CLI.run(["rm", "./" + repo.spec().name], invokedFrom: parent) == 0)
+            #expect(Config.specs().isEmpty)
+        }
+    }
+
+    @Test("rm by name still works from a directory unrelated to the repo")
+    func rmByNameFromElsewhere() {
+        withTemporaryConfig {
+            let repo = TestRepo()
+            _ = CLI.run([repo.path])
+            #expect(CLI.run(["rm", repo.spec().name], invokedFrom: TestDirs.fresh("elsewhere")) == 0)
+            #expect(Config.specs().isEmpty)
+        }
+    }
+
     @Test("rm of an unknown repo fails and leaves the config alone")
     func rmUnknown() {
         withTemporaryConfig {
@@ -151,6 +182,18 @@ struct CLIContract {
             _ = CLI.run([repo.path])
             #expect(CLI.run(["pause", repo.path]) == 0)
             #expect(Config.specs()[0].paused)
+        }
+    }
+
+    @Test("pause and resume take `.` like add does")
+    func pauseResumeRelativeTarget() {
+        withTemporaryConfig {
+            let repo = TestRepo()
+            _ = CLI.run([repo.path])
+            #expect(CLI.run(["pause", "."], invokedFrom: repo.path) == 0)
+            #expect(Config.specs()[0].paused)
+            #expect(CLI.run(["resume", "."], invokedFrom: repo.path) == 0)
+            #expect(!Config.specs()[0].paused)
         }
     }
 
