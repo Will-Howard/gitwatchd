@@ -193,6 +193,121 @@ func TestParitySharpCornerRawDateFormatAndFirstTokenOnly(t *testing.T) {
 	}
 }
 
+// These scenarios compare whole commit-message bodies against the oracle.
+
+func TestParityListChangesEmbedsTheDiff(t *testing.T) {
+	model, ours := twins(t, []string{"-l", "10"}, false, "", func(repo *testRepo, _ *bareRemote) {
+		seed(repo)
+		repo.write("notes.txt", "hello\n")
+		repo.git("add", "-A")
+		repo.git("commit", "-q", "-m", "tracked")
+		repo.write("notes.txt", "hello again\n")
+	})
+	expectParity(t, model, ours)
+	if !strings.Contains(ours.lastMessage, "notes.txt:1: ") || !strings.Contains(ours.lastMessage, "\x1b[") {
+		t.Errorf("both sides embed the coloured diff: %q", ours.lastMessage)
+	}
+}
+
+func TestParityListChangesCutsLongLines(t *testing.T) {
+	model, ours := twins(t, []string{"-l", "0"}, false, "", func(repo *testRepo, _ *bareRemote) {
+		repo.commit("long.txt", "short\n", "seed")
+		repo.write("long.txt", strings.Repeat("x", 200)+"\n")
+	})
+	expectParity(t, model, ours)
+	if strings.Contains(ours.lastMessage, strings.Repeat("x", 150)) {
+		t.Errorf("both sides cut at 150 characters: %q", ours.lastMessage)
+	}
+}
+
+func TestParityListChangesFallsBackToTheDiffstat(t *testing.T) {
+	model, ours := twins(t, []string{"-l", "5"}, false, "", func(repo *testRepo, _ *bareRemote) {
+		repo.commit("n.txt", numberedLines("old", 10), "seed")
+		repo.write("n.txt", numberedLines("new", 10))
+	})
+	expectParity(t, model, ours)
+	if !strings.Contains(ours.lastMessage, "n.txt |") {
+		t.Errorf("20 diff lines exceed -l 5, so both sides summarise: %q", ours.lastMessage)
+	}
+}
+
+func TestParityListChangesWithOnlyNewFiles(t *testing.T) {
+	model, ours := twins(t, []string{"-l", "10"}, false, "", func(repo *testRepo, _ *bareRemote) {
+		seed(repo)
+		repo.write("fresh.txt", "hello\n")
+	})
+	expectParity(t, model, ours)
+	if ours.lastMessage != "New files added: ?? fresh.txt" {
+		t.Errorf("got %q", ours.lastMessage)
+	}
+}
+
+// -L's empty colour argument makes both sides run `git diff -U0 ""`, which
+// this git rejects, so both degrade to the status summary.
+func TestParityPlainListChangesDegrades(t *testing.T) {
+	model, ours := twins(t, []string{"-L", "10"}, false, "", func(repo *testRepo, _ *bareRemote) {
+		repo.commit("a.txt", "alpha\n", "seed")
+		repo.write("a.txt", "beta\n")
+	})
+	expectParity(t, model, ours)
+	if ours.lastMessage != "New files added:  M a.txt" {
+		t.Errorf("got %q", ours.lastMessage)
+	}
+}
+
+// "&&" is an argument to echo, not a shell operator.
+func TestParityCommitCommandIsWordSplit(t *testing.T) {
+	model, ours := twins(t, []string{"-c", "echo a && echo b"}, false, "",
+		func(repo *testRepo, _ *bareRemote) {
+			seed(repo)
+			repo.write("notes.txt", "hello\n")
+		})
+	expectParity(t, model, ours)
+	if ours.lastMessage != "a && echo b" {
+		t.Errorf("got %q", ours.lastMessage)
+	}
+}
+
+// The trailing -f is upstream's `C:` bug showing through: -C swallows the next
+// token, so feeding it a duplicate -f keeps both sides' effective flags equal.
+func TestParityCommitCommandReadsChangedFilesFromStdin(t *testing.T) {
+	model, ours := twins(t, []string{"-c", "cat", "-C", "-f"}, false, "",
+		func(repo *testRepo, _ *bareRemote) {
+			repo.commit("a.txt", "v1\n", "seed")
+			repo.commit("b.txt", "v1\n", "seed b")
+			repo.write("a.txt", "v2\n")
+			repo.write("b.txt", "v2\n")
+		})
+	expectParity(t, model, ours)
+	if ours.lastMessage != "a.txt\nb.txt" {
+		t.Errorf("got %q", ours.lastMessage)
+	}
+}
+
+// Exit status is ignored; printing nothing leaves an empty -m on both sides.
+func TestParityFailingCommitCommandCommitsNothing(t *testing.T) {
+	model, ours := twins(t, []string{"-c", "false"}, false, "", func(repo *testRepo, _ *bareRemote) {
+		seed(repo)
+		repo.write("notes.txt", "hello\n")
+	})
+	expectParity(t, model, ours)
+	if ours.commitCount != 1 || ours.pendingChanges == 0 {
+		t.Errorf("the change stays uncommitted on both sides: %v", ours)
+	}
+}
+
+// -v turns on upstream's tracing and changes nothing about the repo.
+func TestParityVerboseChangesNothing(t *testing.T) {
+	model, ours := twins(t, []string{"-v", "-m", "cycle"}, false, "", func(repo *testRepo, _ *bareRemote) {
+		seed(repo)
+		repo.write("notes.txt", "hello\n")
+	})
+	expectParity(t, model, ours)
+	if ours.commitCount != 2 || ours.lastMessage != "cycle" {
+		t.Errorf("got %v", ours)
+	}
+}
+
 func TestParityPushToRemote(t *testing.T) {
 	model, ours := twins(t, []string{"-m", "cycle", "-r", "origin", "-b", "main"}, true, "",
 		func(repo *testRepo, _ *bareRemote) {
@@ -312,5 +427,47 @@ func TestParityRebaseConflictLeftInProgress(t *testing.T) {
 	expectParity(t, model, ours)
 	if !ours.midRebase {
 		t.Error("both sides stop mid-rebase; -M is the only guard")
+	}
+}
+
+// Pinned upstream bug: the unanchored header regexes run before the content one,
+// so a changed line whose text contains "--- x" is eaten and corrupts the path.
+func TestParityListChangesEatsContentLinesResemblingHeaders(t *testing.T) {
+	model, ours := twins(t, []string{"-l", "10"}, false, "", func(repo *testRepo, _ *bareRemote) {
+		repo.commit("a.txt", "alpha\n", "seed")
+		repo.write("a.txt", "alpha\n--- section two\nbeta\n")
+	})
+	expectParity(t, model, ours)
+	if strings.Contains(ours.lastMessage, "section") || !strings.Contains(ours.lastMessage, "beta") {
+		t.Errorf("got %q", ours.lastMessage)
+	}
+}
+
+// Pinned upstream bug: the 150-char cut counts colour escapes and can land inside
+// one, leaving a dangling ESC in the commit message.
+func TestParityListChangesCutCanSplitAnEscape(t *testing.T) {
+	model, ours := twins(t, []string{"-l", "10"}, false, "", func(repo *testRepo, _ *bareRemote) {
+		repo.commit("a.txt", "short\n", "seed")
+		// 135 content chars put char 150 inside this git's trailing \x1b[m.
+		repo.write("a.txt", strings.Repeat("x", 135)+"\n")
+	})
+	expectParity(t, model, ours)
+	if !strings.HasSuffix(ours.lastMessage, "\x1b") && !strings.HasSuffix(ours.lastMessage, "\x1b[") {
+		t.Errorf("expected a dangling escape, got %q", ours.lastMessage)
+	}
+}
+
+// Pinned upstream quirk: the -l diff is repo-wide even for a file target, so the
+// message can describe changes the commit does not include.
+func TestParityListChangesOnAFileTargetEmbedsTheWholeRepoDiff(t *testing.T) {
+	model, ours := twins(t, []string{"-l", "10"}, false, "a.txt", func(repo *testRepo, _ *bareRemote) {
+		repo.commit("a.txt", "v1\n", "seed")
+		repo.commit("b.txt", "v1\n", "seed b")
+		repo.write("a.txt", "v2\n")
+		repo.write("b.txt", "v2\n")
+	})
+	expectParity(t, model, ours)
+	if !strings.Contains(ours.lastMessage, "b.txt:") || ours.pendingChanges == 0 {
+		t.Errorf("the message names b.txt yet b.txt stays uncommitted: %v", ours)
 	}
 }

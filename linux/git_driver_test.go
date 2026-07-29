@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -66,7 +67,8 @@ func (r *testRepo) commitCount() int {
 	return n
 }
 
-func (r *testRepo) lastMessage() string { return r.git("log", "-1", "--pretty=%s") }
+// %B, not %s: -l/-L and -c messages are multi-line.
+func (r *testRepo) lastMessage() string { return r.git("log", "-1", "--pretty=%B") }
 
 func (r *testRepo) midMerge() bool {
 	_, err := os.Stat(filepath.Join(r.path, ".git", "MERGE_HEAD"))
@@ -144,7 +146,7 @@ func (b *bareRemote) commitCount() int {
 }
 
 func (b *bareRemote) lastMessage() string {
-	_, out := gitRun([]string{"log", "-1", "--pretty=%s", "main"}, b.path, "")
+	_, out := gitRun([]string{"log", "-1", "--pretty=%B", "main"}, b.path, "")
 	return out
 }
 
@@ -206,6 +208,231 @@ func TestOnlyTheFirstDateTokenIsExpanded(t *testing.T) {
 	got := repo.lastMessage()
 	if !strings.HasPrefix(got, "saved 2") || !strings.HasSuffix(got, " then %d") {
 		t.Errorf("upstream splices the date into the first %%d only, got: %s", got)
+	}
+}
+
+func numberedLines(prefix string, n int) string {
+	var lines []string
+	for i := 1; i <= n; i++ {
+		lines = append(lines, fmt.Sprintf("%s%d", prefix, i))
+	}
+	return strings.Join(lines, "\n") + "\n"
+}
+
+func TestListChangesEmbedsTheColouredDiff(t *testing.T) {
+	repo := newTestRepo(t)
+	repo.write("a.txt", "alpha\n")
+	autoCommit(repo.spec())
+	repo.write("a.txt", "beta\n")
+	if got := autoCommit(repo.spec("-l", "10", "-m", "unused")); got.Kind != Committed {
+		t.Fatalf("got %+v", got)
+	}
+	// Exact bytes vary with git version and colour config, so this asserts
+	// structure plus the presence of escapes; the parity suite pins the exact
+	// bytes differentially against the same git.
+	if !strings.Contains(repo.lastMessage(), "\x1b[") {
+		t.Errorf("-l keeps git's colour codes, got: %q", repo.lastMessage())
+	}
+	if !strings.Contains(repo.lastMessage(), "a.txt:1: ") {
+		t.Errorf("hunk lines carry path:line:, got: %q", repo.lastMessage())
+	}
+}
+
+func TestListChangesCutsEachLineAt150Chars(t *testing.T) {
+	repo := newTestRepo(t)
+	repo.write("long.txt", "short\n")
+	autoCommit(repo.spec())
+	repo.write("long.txt", strings.Repeat("x", 200)+"\n")
+	autoCommit(repo.spec("-l", "0"))
+	if !strings.Contains(repo.lastMessage(), strings.Repeat("x", 100)) {
+		t.Errorf("the long line is embedded, got: %q", repo.lastMessage())
+	}
+	if strings.Contains(repo.lastMessage(), strings.Repeat("x", 150)) {
+		t.Error("cut at 150 chars of raw diff line (colour codes count)")
+	}
+	for _, line := range strings.Split(repo.lastMessage(), "\n") {
+		if len([]rune(line)) > len("long.txt:1: ")+150 {
+			t.Errorf("over-long line: %q", line)
+		}
+	}
+}
+
+func TestListChangesZeroMeansUnlimited(t *testing.T) {
+	repo := newTestRepo(t)
+	repo.write("n.txt", numberedLines("old", 10))
+	autoCommit(repo.spec())
+	repo.write("n.txt", numberedLines("new", 10))
+	autoCommit(repo.spec("-l", "0"))
+	lines := strings.Split(repo.lastMessage(), "\n")
+	if len(lines) != 20 {
+		t.Fatalf("10 removals + 10 additions, got: %q", repo.lastMessage())
+	}
+	if !strings.HasPrefix(lines[0], "n.txt:1: ") || !strings.Contains(lines[0], "-old1") {
+		t.Errorf("removals keep the hunk's start line, got: %q", lines[0])
+	}
+	last := lines[19]
+	if !strings.HasPrefix(last, "n.txt:10: ") || !strings.Contains(last, "new10") {
+		t.Errorf("additions advance the line number, got: %q", last)
+	}
+}
+
+func TestListChangesAtExactlyTheCapStillEmbeds(t *testing.T) {
+	repo := newTestRepo(t)
+	repo.write("n.txt", numberedLines("old", 10))
+	autoCommit(repo.spec())
+	repo.write("n.txt", numberedLines("new", 10))
+	autoCommit(repo.spec("-l", "20")) // the cap is "more than", not "at least"
+	if n := len(strings.Split(repo.lastMessage(), "\n")); n != 20 {
+		t.Errorf("20 diff lines fit in -l 20, got %d: %q", n, repo.lastMessage())
+	}
+}
+
+func TestListChangesBeyondTheCapFallsBackToTheDiffstat(t *testing.T) {
+	repo := newTestRepo(t)
+	repo.write("n.txt", numberedLines("old", 10))
+	autoCommit(repo.spec())
+	repo.write("n.txt", numberedLines("new", 10))
+	autoCommit(repo.spec("-l", "5"))
+	if !strings.Contains(repo.lastMessage(), "n.txt |") {
+		t.Errorf("diffstat summary expected, got: %q", repo.lastMessage())
+	}
+	if strings.Contains(repo.lastMessage(), "n.txt:1:") {
+		t.Error("no embedded diff lines")
+	}
+	if strings.Contains(repo.lastMessage(), "\x1b") {
+		t.Error("upstream's stat command takes no colour flag")
+	}
+}
+
+func TestListChangesWithOnlyNewFilesListsThem(t *testing.T) {
+	repo := newTestRepo(t)
+	repo.write("seed.txt", "seed\n")
+	autoCommit(repo.spec())
+	repo.write("fresh.txt", "hello\n")
+	autoCommit(repo.spec("-l", "10"))
+	if repo.lastMessage() != "New files added: ?? fresh.txt" {
+		t.Errorf("status is taken before git add, got: %q", repo.lastMessage())
+	}
+}
+
+func TestListChangesReportsADeletedFile(t *testing.T) {
+	repo := newTestRepo(t)
+	repo.write("doomed.txt", "contents\n")
+	repo.write("keep.txt", "kept\n")
+	autoCommit(repo.spec())
+	os.Remove(filepath.Join(repo.path, "doomed.txt"))
+	autoCommit(repo.spec("-l", "10"))
+	if repo.lastMessage() != "File doomed.txt deleted or moved." {
+		t.Errorf("got: %q", repo.lastMessage())
+	}
+}
+
+// Upstream hands git the raw bytes it read; git transcodes them into the object,
+// so assert on the built message, not the stored one.
+func TestListChangesEmbedsANonUTF8Diff(t *testing.T) {
+	repo := newTestRepo(t)
+	file := filepath.Join(repo.path, "x.txt")
+	os.WriteFile(file, []byte("alpha\n"), 0o644)
+	autoCommit(repo.spec())
+	os.WriteFile(file, []byte{0x62, 0xE9, 0x74, 0x61, 0x0A}, 0o644) // Latin-1 e-acute
+	msg := listChangesMessage(repo.spec("-l", "10"))
+	if !strings.Contains(msg, "x.txt:1: ") {
+		t.Errorf("a non-UTF-8 byte must not empty the diff, got: %q", msg)
+	}
+	if !strings.Contains(msg, "\xe9") {
+		t.Errorf("the invalid byte survives verbatim, got: %q", msg)
+	}
+}
+
+// Pinned bug-for-bug: git > 2.39 rejects the empty colour argument as a pathspec,
+// so every -L commit degrades to the status summary.
+
+func TestPlainListChangesDegradesToTheStatusSummary(t *testing.T) {
+	repo := newTestRepo(t)
+	repo.write("a.txt", "alpha\n")
+	autoCommit(repo.spec())
+	repo.write("a.txt", "beta\n")
+	if got := autoCommit(repo.spec("-L", "10", "-m", "unused")); got.Kind != Committed {
+		t.Fatalf("got %+v", got)
+	}
+	if repo.lastMessage() != "New files added:  M a.txt" {
+		t.Errorf("upstream's degraded -L output, got: %q", repo.lastMessage())
+	}
+}
+
+func TestPlainListChangesNeverAppliesTheCap(t *testing.T) {
+	// The empty diff message always satisfies the length gate, so no -L value
+	// (small cap or 0 = unlimited) ever embeds a diff or a diffstat.
+	for _, cap := range []string{"5", "0"} {
+		repo := newTestRepo(t)
+		repo.write("n.txt", numberedLines("old", 10))
+		autoCommit(repo.spec())
+		repo.write("n.txt", numberedLines("new", 10))
+		autoCommit(repo.spec("-L", cap))
+		if repo.lastMessage() != "New files added:  M n.txt" {
+			t.Errorf("-L %s: upstream's degraded output, got: %q", cap, repo.lastMessage())
+		}
+	}
+}
+
+// -c/-C: the command's stdout is the message, overriding -m, -d and -l/-L.
+
+func TestCommitCommandOutputBecomesTheMessage(t *testing.T) {
+	repo := newTestRepo(t)
+	repo.write("a.txt", "1")
+	autoCommit(repo.spec("-c", "echo release notes", "-m", "unused"))
+	if repo.lastMessage() != "release notes" {
+		t.Errorf("got %q", repo.lastMessage())
+	}
+}
+
+func TestCommitCommandIsWordSplitNotShellInterpreted(t *testing.T) {
+	repo := newTestRepo(t)
+	repo.write("a.txt", "1")
+	autoCommit(repo.spec("-c", "echo a && echo b"))
+	if repo.lastMessage() != "a && echo b" {
+		t.Errorf("got %q", repo.lastMessage())
+	}
+}
+
+func TestCommitCommandOverridesListChanges(t *testing.T) {
+	repo := newTestRepo(t)
+	repo.write("a.txt", "alpha\n")
+	autoCommit(repo.spec())
+	repo.write("a.txt", "beta\n")
+	autoCommit(repo.spec("-l", "10", "-m", "unused", "-c", "echo from the command"))
+	if repo.lastMessage() != "from the command" {
+		t.Errorf("-c is applied last, got %q", repo.lastMessage())
+	}
+}
+
+// Exit status is ignored; printing nothing leaves an empty -m, which git refuses.
+func TestFailingCommitCommandAbortsTheCommit(t *testing.T) {
+	repo := newTestRepo(t)
+	repo.write("a.txt", "1")
+	got := autoCommit(repo.spec("-c", "false", "-m", "unused"))
+	if got.Kind != CommitFailed {
+		t.Fatalf("expected commitFailed, got %+v", got)
+	}
+	if repo.commitCount() != 0 {
+		t.Error("no commit is made with an empty message")
+	}
+}
+
+func TestPipeChangedFilesFeedsTheCommandStdin(t *testing.T) {
+	repo := newTestRepo(t)
+	repo.write("a.txt", "v1\n")
+	repo.write("b.txt", "v1\n")
+	autoCommit(repo.spec())
+	repo.write("a.txt", "v2\n")
+	repo.write("b.txt", "v2\n")
+	autoCommit(repo.spec("-c", "cat", "-C"))
+	if repo.lastMessage() != "a.txt\nb.txt" {
+		t.Errorf("`git diff --name-only` of the unstaged tree, got %q", repo.lastMessage())
+	}
+	repo.write("a.txt", "v3\n")
+	if got := autoCommit(repo.spec("-c", "cat")); got.Kind != CommitFailed {
+		t.Errorf("without -C the command reads /dev/null and prints nothing: %+v", got)
 	}
 }
 
@@ -508,5 +735,23 @@ func TestRebaseConflictIsReportedAndLeftInProgress(t *testing.T) {
 	// for the user to resolve; we only make it visible in status.
 	if !repo.midRebase() {
 		t.Error("the conflicted rebase is left in progress")
+	}
+}
+
+// Matching macOS, not upstream: upstream runs the -c command on every cycle,
+// even with nothing to commit; we short-circuit first.
+func TestCommitCommandDoesNotRunOnACleanCycle(t *testing.T) {
+	repo := newTestRepo(t)
+	repo.commit("a.txt", "v1\n", "seed")
+	marker := filepath.Join(t.TempDir(), "ran")
+	spec, errMsg := parseRepoSpec([]string{"-c", "touch " + marker, repo.path})
+	if spec == nil {
+		t.Fatal(errMsg)
+	}
+	if got := autoCommit(spec); got.Kind != Clean {
+		t.Fatalf("got %v", got)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Error("the -c command ran on a clean cycle")
 	}
 }

@@ -62,6 +62,16 @@ FLAGS (for add)
                 Default: "gitwatchd auto-commit (%d)".
   -d <fmt>      Format string for that timestamp (see ` + "`man date`" + `).
                 Default: "+%Y-%m-%d %H:%M:%S".
+  -l <lines>    Use the diff itself as the commit message (file:line: change,
+                in colour), up to <lines> lines (0 = no limit). A diff
+                longer than <lines> falls back to the ` + "`git diff --stat`" + `
+                summary. Overrides -m.
+  -L <lines>    Same as -l, without colour. Known bug: on git versions > 2.39
+                this falls back to a status summary.
+  -c <command>  Run <command> and use its output as the commit message.
+                Overrides -m and -d.
+  -C            Pipe the changed file names into the -c command's stdin.
+                Requires -c flag, e.g. ` + "`gitwatchd -c 'xargs echo updated:' -C .`" + `
   -x <pattern>  Skip changes whose path matches this regular
                 expression (e.g. '\.log$' or 'build/').
   -M            Skip committing while the repo has a merge in progress.
@@ -84,24 +94,29 @@ type ConfigError struct {
 // A watched-repo specification, expressed in gitwatch's flag vocabulary.
 //
 //	gitwatch  [-s secs] [-d fmt] [-r remote [-b branch]] [-R] [-m msg]
-//	          [-x pattern] [-M] [-g gitdir] [-e events] <target>
+//	          [-c cmd] [-C] [-l|-L lines] [-x pattern] [-M] [-g gitdir]
+//	          [-e events] <target>
 //
 // Each config line is exactly the argument string you'd pass to gitwatch (modulo path resolution).
 type RepoSpec struct {
-	Path          string
-	Settle        float64 // -s  debounce seconds
-	DateFormat    string  // -d
-	Remote        string  // -r
-	Branch        string  // -b
-	Rebase        bool    // -R  pull --rebase before push
-	Message       string  // -m  (%d -> date)
-	Exclude       string  // -x  regex; last one wins, as upstream
-	NoMergeCommit bool    // -M
-	CommitOnStart bool    // -f  commit pending changes when watching starts
-	GitDir        string  // -g  --git-dir
-	Paused        bool    // --paused (gitwatchd extension, not gitwatch)
-	Raw           string  // the config line this spec came from, for change detection
-	targetIndex   int     // which arg was the target, so add can persist it resolved
+	Path             string
+	Settle           float64 // -s  debounce seconds
+	DateFormat       string  // -d
+	Remote           string  // -r
+	Branch           string  // -b
+	Rebase           bool    // -R  pull --rebase before push
+	Message          string  // -m  (%d -> date)
+	CommitCommand    string  // -c  its stdout becomes the commit message
+	PipeChangedFiles bool    // -C  pipe changed file names to the -c command
+	ListChanges      int     // -l/-L  diff lines allowed in the message; -1 off, 0 unlimited
+	ListChangesColor bool    // false once -L appears; -l never restores it, as upstream
+	Exclude          string  // -x  regex; last one wins, as upstream
+	NoMergeCommit    bool    // -M
+	CommitOnStart    bool    // -f  commit pending changes when watching starts
+	GitDir           string  // -g  --git-dir
+	Paused           bool    // --paused (gitwatchd extension, not gitwatch)
+	Raw              string  // the config line this spec came from, for change detection
+	targetIndex      int     // which arg was the target, so add can persist it resolved
 }
 
 func (s RepoSpec) Name() string {
@@ -764,9 +779,11 @@ func tokenize(line string) []string {
 // Returns nil + an error message if there's no valid target.
 func parseRepoSpec(args []string) (*RepoSpec, string) {
 	spec := &RepoSpec{
-		Settle:     2,
-		DateFormat: "+%Y-%m-%d %H:%M:%S",
-		Message:    "gitwatchd auto-commit (%d)",
+		Settle:           2,
+		DateFormat:       "+%Y-%m-%d %H:%M:%S",
+		Message:          "gitwatchd auto-commit (%d)",
+		ListChanges:      -1,
+		ListChangesColor: true,
 	}
 	target := ""
 	haveTarget := false
@@ -807,6 +824,24 @@ func parseRepoSpec(args []string) (*RepoSpec, string) {
 			if v, ok := next(); ok {
 				spec.Message = v
 			}
+		case "-c":
+			if v, ok := next(); ok {
+				spec.CommitCommand = v
+			}
+		case "-C":
+			// Boolean, as on macOS: upstream declares `C:` yet ignores OPTARG,
+			// so its documented `-c cmd -C <target>` swallows the target.
+			spec.PipeChangedFiles = true
+		case "-l", "-L":
+			v, ok := next()
+			n, err := strconv.Atoi(v)
+			if !ok || err != nil || n < 0 {
+				return nil, a + " needs a number of lines, 0 or more"
+			}
+			spec.ListChanges = n
+			if a == "-L" {
+				spec.ListChangesColor = false // -l never restores colour, as upstream
+			}
 		case "-x":
 			v, ok := next()
 			if !ok {
@@ -826,6 +861,8 @@ func parseRepoSpec(args []string) (*RepoSpec, string) {
 			}
 		case "-e":
 			next() // -e accepted for gitwatch compatibility; ignored
+		case "-v":
+			// verbose: accepted, no-op (gitwatch's -v turns on bash tracing)
 		case "--paused":
 			spec.Paused = true
 		default:

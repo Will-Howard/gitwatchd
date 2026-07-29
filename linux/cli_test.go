@@ -405,6 +405,12 @@ func TestDefaultsForBarePath(t *testing.T) {
 	if spec.CommitOnStart {
 		t.Error("-f is opt-in: a deliberate manual state is not flushed")
 	}
+	if spec.CommitCommand != "" || spec.PipeChangedFiles { // -c "Overrides -m and -d"; -C off
+		t.Errorf("unexpected non-default: %+v", spec)
+	}
+	if spec.ListChanges != -1 || !spec.ListChangesColor {
+		t.Error("-l/-L off by default; the -m message is used")
+	}
 }
 
 func TestPIsAnAliasOfR(t *testing.T) {
@@ -427,6 +433,61 @@ func TestSettleRejectsBadValues(t *testing.T) {
 	spec, _ := parseRepoSpec([]string{"-s", "0", "/tmp/x"})
 	if spec == nil || spec.Settle != 0 {
 		t.Error("-s 0 is valid")
+	}
+}
+
+func TestVerboseIsAcceptedAndIgnored(t *testing.T) {
+	spec, msg := parseRepoSpec([]string{"-v", "/tmp/x"})
+	if spec == nil || spec.Path != "/tmp/x" {
+		t.Errorf("-v is accepted for gitwatch parity, then ignored: %s", msg)
+	}
+}
+
+func TestListChangesFlagsSetTheCapAndColour(t *testing.T) {
+	spec, _ := parseRepoSpec([]string{"-l", "10", "/tmp/x"})
+	if spec.ListChanges != 10 || !spec.ListChangesColor {
+		t.Errorf("got %+v", spec)
+	}
+	spec, _ = parseRepoSpec([]string{"-L", "10", "/tmp/x"})
+	if spec.ListChanges != 10 || spec.ListChangesColor {
+		t.Errorf("-L is -l without colour, got %+v", spec)
+	}
+	spec, _ = parseRepoSpec([]string{"-L", "5", "-l", "3", "/tmp/x"})
+	if spec.ListChanges != 3 {
+		t.Errorf("the line cap itself is last-wins, got %+v", spec)
+	}
+	if spec.ListChangesColor {
+		t.Error("upstream's -l never restores colour once -L appeared")
+	}
+}
+
+func TestListChangesRejectsBadLineCounts(t *testing.T) {
+	if spec, _ := parseRepoSpec([]string{"-l", "many", "/tmp/x"}); spec != nil {
+		t.Error("-l many should be rejected")
+	}
+	if spec, _ := parseRepoSpec([]string{"-L", "-1", "/tmp/x"}); spec != nil {
+		t.Error("-L -1 should be rejected")
+	}
+	if spec, _ := parseRepoSpec([]string{"-l", "0", "/tmp/x"}); spec == nil || spec.ListChanges != 0 {
+		t.Error("-l 0 is valid and means unlimited")
+	}
+}
+
+func TestCommitCommandIsStoredVerbatim(t *testing.T) {
+	spec, _ := parseRepoSpec([]string{"-c", "echo a b", "-C", "/tmp/x"})
+	if spec == nil || spec.CommitCommand != "echo a b" || !spec.PipeChangedFiles {
+		t.Errorf("got %+v", spec)
+	}
+}
+
+// Deliberate divergence from upstream, matching macOS: gitwatch's getopts
+// declares -C as taking an argument, so there `-c cmd -C <target>` loses the
+// target. Treating -C as the boolean its body implies keeps every documented
+// invocation working.
+func TestPipeFlagConsumesNoArgument(t *testing.T) {
+	spec, _ := parseRepoSpec([]string{"-C", "-r", "origin", "/tmp/x"})
+	if spec == nil || !spec.PipeChangedFiles || spec.Remote != "origin" || spec.Path != "/tmp/x" {
+		t.Errorf("got %+v", spec)
 	}
 }
 
@@ -480,9 +541,10 @@ func TestNoExcludeByDefault(t *testing.T) {
 var contractValueFlags = map[string]string{
 	"-s": "2", "-r": "origin", "-b": "main", "-m": "msg",
 	"-d": "+%Y", "-x": `\.log$`, "-g": "/tmp/gd",
+	"-l": "10", "-L": "10", "-c": "echo hi",
 }
 
-var contractBoolFlags = []string{"-R", "-M", "-f", "--paused"}
+var contractBoolFlags = []string{"-R", "-M", "-f", "-C", "--paused"}
 var contractCommands = []string{"add", "rm", "pause", "resume", "status",
 	"start", "stop", "autostart", "config", "help", "version"}
 
