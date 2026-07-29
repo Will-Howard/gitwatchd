@@ -7,9 +7,7 @@ import (
 	"strings"
 )
 
-// Thin wrapper around git. No external deps: this plus inotify is the whole
-// engine. Behavior mirrors gitwatch: debounced auto-commit, optional push to a
-// remote/branch, optional pull --rebase, optional merge-commit guard.
+// Thin wrapper around git.
 
 // What one auto-commit cycle (or push retry) accomplished. The git commands
 // and their order are gitwatch's; this only reports the result.
@@ -177,15 +175,6 @@ func autoCommit(spec *RepoSpec) Outcome {
 	return pushed
 }
 
-// The push stage of a cycle, exactly as gitwatch runs it. With -R, first
-// `git pull --rebase <remote>` (no branch argument, exit code ignored, no
-// abort: a conflict leaves the rebase in progress for the user to resolve,
-// and -M is the only guard). Then the push, which upstream runs regardless
-// of how the pull went. Split out from autoCommit so a failed push can be
-// retried without re-running the commit stage.
-//
-// Everything below the git calls is reporting only: gitwatch ignores both
-// results; we classify them for status.
 func push(spec *RepoSpec) Outcome {
 	if spec.Remote == "" {
 		return Outcome{Kind: Committed}
@@ -216,7 +205,7 @@ func push(spec *RepoSpec) Outcome {
 
 // gitwatch's push command: without -b, a bare `push <remote>` (git's
 // push.default decides); with -b, push `<current>:<branch>`, or just
-// `<branch>` from a detached HEAD. Internal so tests can pin the forms.
+// `<branch>` from a detached HEAD.
 func pushArgs(remote string, spec *RepoSpec) []string {
 	if spec.Branch == "" {
 		return []string{"push", remote}
@@ -249,9 +238,8 @@ func errorSummary(out string) string {
 	return "unknown git error"
 }
 
-// Render the current date exactly as upstream does: the -d value passes to
-// date(1) verbatim (the user includes the leading +), and a format date(1)
-// rejects yields an empty string.
+// The -d value passes to date(1) verbatim (the user includes the leading +), to
+// match the upstream gitwatch
 func formattedDate(fmt string) string {
 	code, out := runCommand("date", []string{fmt}, "")
 	if code != 0 {

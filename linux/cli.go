@@ -28,13 +28,12 @@ type ConfigError struct {
 	RepoPath string // set when there is a path to re-check for healing
 }
 
-// A watched-repo specification, expressed in gitwatch's own flag vocabulary so
-// that gitwatch users read our config/CLI with zero translation.
+// A watched-repo specification, expressed in gitwatch's flag vocabulary.
 //
 //	gitwatch  [-s secs] [-d fmt] [-r remote [-b branch]] [-R] [-m msg]
 //	          [-x pattern] [-M] [-g gitdir] [-e events] <target>
 //
-// Each config line is exactly the argument string you'd pass to gitwatch.
+// Each config line is exactly the argument string you'd pass to gitwatch (modulo path resolution).
 type RepoSpec struct {
 	Path          string
 	Settle        float64 // -s  debounce seconds
@@ -47,14 +46,14 @@ type RepoSpec struct {
 	NoMergeCommit bool    // -M
 	CommitOnStart bool    // -f  commit pending changes when watching starts
 	GitDir        string  // -g  --git-dir
-	Paused        bool    // --paused (gitwatchd extension, not gitwatch:
-	//                       config-level so a pause survives restarts)
-	Raw string // the config line this spec came from, for change detection
-
-	targetIndex int // which arg was the target, so add can persist it resolved
+	Paused        bool    // --paused (gitwatchd extension, not gitwatch)
+	Raw           string  // the config line this spec came from, for change detection
+	targetIndex   int     // which arg was the target, so add can persist it resolved
 }
 
-func (s RepoSpec) Name() string { return filepath.Base(s.Path) }
+func (s RepoSpec) Name() string {
+	return filepath.Base(s.Path)
+}
 
 func (s RepoSpec) IsFileTarget() bool {
 	info, err := os.Stat(s.Path)
@@ -232,8 +231,6 @@ func cliSetPaused(args []string, paused bool) int {
 	return 0
 }
 
-// The status rows, same strings as the macOS menu, plus the daemon's
-// published error state when it is running.
 func cliStatus() int {
 	running := isDaemonRunning()
 	state := "not running"
@@ -409,6 +406,7 @@ func cliStop() int {
 	} else if pid := daemonPid(); pid > 0 {
 		syscall.Kill(pid, syscall.SIGTERM)
 	}
+
 	// Wait for the exit so `gitwatchd stop && gitwatchd start` doesn't race
 	// the old process.
 	for i := 0; i < 50 && isDaemonRunning(); i++ {
@@ -810,9 +808,6 @@ func homeDir() string {
 	return h
 }
 
-// Pure string formatting for `gitwatchd status`. Same rows and strings as the
-// macOS menu, so the habit transfers between machines unchanged.
-
 // One status tail at most: paused wins over errors, errors over pending.
 func rowTitle(name, branch string, paused bool, pending int, errorLabel string) string {
 	base := name + " · " + branch
@@ -888,8 +883,9 @@ func span(seconds float64) string {
 }
 
 // Autostart = a systemd user unit, the standard way for a per-user daemon to
-// survive reboots and headless boots (with lingering). When systemd is absent
-// we say so and do nothing: no shell-profile edits, ever.
+// survive reboots and headless boots (with lingering). If systemd is absent,
+// report this and do nothing (the user should e.g. add `gitwatchd start` to
+// a startup script in this case).
 
 func unitPath() string {
 	return filepath.Join(homeDir(), ".config", "systemd", "user", "gitwatchd.service")
