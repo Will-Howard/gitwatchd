@@ -519,11 +519,13 @@ func backoffDelay(afterFailures int) time.Duration {
 	if afterFailures <= 1 {
 		return backoffFirst
 	}
-	d := time.Duration(float64(backoffFirst) * math.Pow(2, float64(afterFailures-1)))
-	if d > backoffCap {
+	// Compare before converting: past ~30 failures the product overflows
+	// time.Duration and the conversion result is negative.
+	d := float64(backoffFirst) * math.Pow(2, float64(afterFailures-1))
+	if d > float64(backoffCap) {
 		return backoffCap
 	}
-	return d
+	return time.Duration(d)
 }
 
 // Fold an outcome into the error state, schedule the next automatic retry,

@@ -639,6 +639,12 @@ func TestBackoffSchedule(t *testing.T) {
 			t.Errorf("after %d failures: got %v, want %v", i+1, got, w)
 		}
 	}
+	// A day-long outage: the doubling must saturate at the cap, never overflow.
+	for _, n := range []int{30, 288, 100000} {
+		if got := backoffDelay(n); got != backoffCap {
+			t.Errorf("after %d failures: got %v, want the %v cap", n, got, backoffCap)
+		}
+	}
 }
 
 func TestErrorSummaryPicksRejectionLine(t *testing.T) {
