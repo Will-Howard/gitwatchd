@@ -301,6 +301,80 @@ func TestTokenizeRespectsQuotes(t *testing.T) {
 	}
 }
 
+// Autostart onboarding: what a daemon start does about autostart, given the
+// recorded wish, where the binary lives and whether systemd is here.
+
+func TestAutostartDecisionTable(t *testing.T) {
+	installed := autostartConditions{installedBinary: true, systemdPresent: true}
+	cases := []struct {
+		what       string
+		conditions autostartConditions
+		want       autostartAction
+	}{
+		{"a development copy is never onboarded",
+			autostartConditions{systemdPresent: true}, autostartLeaveAlone},
+		{"a development copy is left alone even with a wish on record",
+			autostartConditions{recorded: true, wantsOn: true, systemdPresent: true}, autostartLeaveAlone},
+		{"the first installed run turns autostart on",
+			installed, autostartEnableFirstRun},
+		{"a wish that is already satisfied needs nothing",
+			autostartConditions{installedBinary: true, systemdPresent: true,
+				recorded: true, wantsOn: true, unitEnabled: true}, autostartLeaveAlone},
+		{"a wanted unit that went missing is reinstated",
+			autostartConditions{installedBinary: true, systemdPresent: true,
+				recorded: true, wantsOn: true}, autostartReinstate},
+		{"an opt-out is never overridden",
+			autostartConditions{installedBinary: true, systemdPresent: true, recorded: true},
+			autostartLeaveAlone},
+		{"the first installed run without systemd says so",
+			autostartConditions{installedBinary: true}, autostartReportUnavailable},
+		{"without systemd it says so once, not on every start",
+			autostartConditions{installedBinary: true, recorded: true, wantsOn: true},
+			autostartLeaveAlone},
+		{"an opt-out without systemd stays quiet",
+			autostartConditions{installedBinary: true, recorded: true}, autostartLeaveAlone},
+	}
+	for _, c := range cases {
+		if got := autostartActionFor(c.conditions); got != c.want {
+			t.Errorf("%s: action %d, want %d (%+v)", c.what, got, c.want, c.conditions)
+		}
+	}
+}
+
+func TestAutostartWishIsRecordedInItsOwnFile(t *testing.T) {
+	withTemporaryConfig(t)
+	if _, recorded := recordedAutostartWish(); recorded {
+		t.Error("nothing is on record until the user or a first run says so")
+	}
+	recordAutostartWish(true)
+	if on, recorded := recordedAutostartWish(); !on || !recorded {
+		t.Errorf("after recording on: on=%v recorded=%v", on, recorded)
+	}
+	recordAutostartWish(false)
+	if on, recorded := recordedAutostartWish(); on || !recorded {
+		t.Errorf("after recording off: on=%v recorded=%v", on, recorded)
+	}
+	if _, err := os.Stat(statePath()); err == nil {
+		t.Error("the wish must not be written into the daemon's error state file")
+	}
+}
+
+func TestOnlyAnInstalledBinaryIsOnboarded(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	for _, dir := range []string{".local/bin", "bin", "build"} {
+		os.MkdirAll(filepath.Join(home, dir), 0o755)
+	}
+	for _, dir := range []string{".local/bin", "bin"} {
+		if !isInstalledBinary(filepath.Join(home, dir, "gitwatchd")) {
+			t.Errorf("%s is one of the install destinations", dir)
+		}
+	}
+	if isInstalledBinary(filepath.Join(home, "build", "gitwatchd")) {
+		t.Error("a build directory holds a development copy")
+	}
+}
+
 // The help text states flag defaults and exclusion behaviour as facts;
 // these tests pin them so the help can't silently drift from the code.
 

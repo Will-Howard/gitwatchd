@@ -34,6 +34,10 @@ func statePath() string   { return filepath.Join(stateDir(), "state.json") }
 func pidfilePath() string { return filepath.Join(stateDir(), "gitwatchd.pid") }
 func logfilePath() string { return filepath.Join(stateDir(), "daemon.log") }
 
+// The autostart wish gets its own file: state.json is the daemon's error
+// channel for `status`, written whole on every change.
+func autostartWishPath() string { return filepath.Join(stateDir(), "autostart") }
+
 // The event set gitwatch passes to inotifywait:
 // close_write,move,move_self,delete,create,modify.
 const watchMask = syscall.IN_CLOSE_WRITE | syscall.IN_MOVED_FROM | syscall.IN_MOVED_TO |
@@ -136,6 +140,9 @@ func runDaemon() int {
 		},
 	}
 	d.logf("gitwatchd %s: watching config %s", version, configPath())
+	if msg := reconcileAutostart(); msg != "" {
+		d.logf("%s", msg)
+	}
 	d.reloadConfig()
 
 	configChanged := make(chan struct{}, 1)

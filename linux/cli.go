@@ -40,7 +40,10 @@ COMMANDS
   status                everything being watched, in the terminal
   start, stop           start or stop the daemon
   autostart [on|off|status]
-                        run the daemon at boot (installs a systemd user unit)
+                        run the daemon at boot (installs a systemd user unit).
+                        On by default: the first run of an installed gitwatchd
+                        turns it on. ` + "`gitwatchd autostart off`" + ` is the
+                        standing opt-out, and nothing turns it back on for you.
   config [path|edit]    print the config file path, or open it in your
                         editor (the one ` + "`git commit`" + ` uses)
   help                  show this help
@@ -944,16 +947,20 @@ func unitActive() bool {
 	return out == "active"
 }
 
-func autostartOn() int {
-	if !systemctlPresent() {
-		warn("systemd not found: autostart needs a systemd user session.\n" +
-			"  run the daemon manually instead: gitwatchd start")
-		return 1
+func unitEnabled() bool {
+	if !unitInstalled() {
+		return false
 	}
+	_, out := systemctlUser("is-enabled", "gitwatchd")
+	return out == "enabled"
+}
+
+// Write the systemd user unit for the running binary, so systemd knows what
+// to run. Returns "" on success, or why not.
+func writeAutostartUnit() string {
 	exe, err := os.Executable()
 	if err != nil {
-		warn("cannot resolve the gitwatchd binary path: " + err.Error())
-		return 1
+		return "cannot resolve the gitwatchd binary path: " + err.Error()
 	}
 	exe, _ = filepath.EvalSymlinks(exe)
 	unit := fmt.Sprintf(`[Unit]
@@ -968,14 +975,38 @@ RestartSec=5
 WantedBy=default.target
 `, exe)
 	if err := os.MkdirAll(filepath.Dir(unitPath()), 0o755); err != nil {
-		warn("cannot create " + filepath.Dir(unitPath()) + ": " + err.Error())
-		return 1
+		return "cannot create " + filepath.Dir(unitPath()) + ": " + err.Error()
 	}
 	if err := os.WriteFile(unitPath(), []byte(unit), 0o644); err != nil {
-		warn("cannot write " + unitPath() + ": " + err.Error())
-		return 1
+		return "cannot write " + unitPath() + ": " + err.Error()
 	}
 	systemctlUser("daemon-reload")
+	return ""
+}
+
+// Lingering keeps the user manager (and the daemon) alive without an open
+// session: headless boots, logged-out laptops. Returns "" or why not.
+func enableLinger() string {
+	code, out := runCommand("loginctl", []string{"enable-linger", os.Getenv("USER")}, "")
+	if code != 0 {
+		return strings.TrimSpace(out)
+	}
+	return ""
+}
+
+func autostartOn() int {
+	if !systemctlPresent() {
+		warn("systemd not found: autostart needs a systemd user session.\n" +
+			"  run the daemon manually instead: gitwatchd start")
+		return 1
+	}
+	// Recorded before the outcome is known, so that a failure here is retried
+	// on a later daemon start instead of being forgotten.
+	recordAutostartWish(true)
+	if msg := writeAutostartUnit(); msg != "" {
+		warn(msg)
+		return 1
+	}
 	// A directly spawned daemon holds the single-instance lock and would
 	// make the unit fail; hand it over to systemd.
 	if isDaemonRunning() && !unitActive() {
@@ -988,11 +1019,9 @@ WantedBy=default.target
 		warn("systemctl --user enable --now gitwatchd failed: " + out)
 		return 1
 	}
-	// Lingering keeps the user manager (and the daemon) alive without an
-	// open session: headless boots, logged-out laptops.
-	if code, out := runCommand("loginctl", []string{"enable-linger", os.Getenv("USER")}, ""); code != 0 {
+	if note := enableLinger(); note != "" {
 		fmt.Println("✓ autostart: on (systemd user unit enabled)")
-		fmt.Println("  note: loginctl enable-linger failed (" + strings.TrimSpace(out) + ")")
+		fmt.Println("  note: loginctl enable-linger failed (" + note + ")")
 		fmt.Println("  without lingering the daemon stops when you log out")
 		return 0
 	}
@@ -1001,6 +1030,7 @@ WantedBy=default.target
 }
 
 func autostartOff() int {
+	recordAutostartWish(false) // a standing opt-out: no later run turns it back on
 	if !systemctlPresent() {
 		warn("systemd not found: nothing to turn off (autostart was never installed)")
 		return 1
@@ -1036,4 +1066,137 @@ func autostartStatus() int {
 		fmt.Printf("autostart: %s (daemon not running)\n", state)
 	}
 	return 0
+}
+
+// First-run onboarding: the daemon matches autostart to the user's recorded
+// wish on every start, so an installed gitwatchd ends up running at boot
+// without anyone asking for it.
+
+// The wish, as its own small file in the state dir: "on", "off", or absent
+// when the user has never said either way.
+func recordedAutostartWish() (wantsOn bool, recorded bool) {
+	raw, err := os.ReadFile(autostartWishPath())
+	if err != nil {
+		return false, false
+	}
+	return strings.TrimSpace(string(raw)) != "off", true
+}
+
+func recordAutostartWish(on bool) {
+	os.MkdirAll(stateDir(), 0o755)
+	value := "off\n"
+	if on {
+		value = "on\n"
+	}
+	os.WriteFile(autostartWishPath(), []byte(value), 0o644)
+}
+
+// install.sh and `make uninstall` know three destinations; a binary anywhere
+// else (a build directory, a checkout) is a development copy, which onboarding
+// leaves alone along with the record.
+func isInstalledBinary(exe string) bool {
+	dir, err := filepath.EvalSymlinks(filepath.Dir(exe))
+	if err != nil {
+		return false
+	}
+	for _, root := range []string{"/usr/local/bin",
+		filepath.Join(homeDir(), ".local", "bin"), filepath.Join(homeDir(), "bin")} {
+		if resolved, err := filepath.EvalSymlinks(root); err == nil && resolved == dir {
+			return true
+		}
+	}
+	return false
+}
+
+type autostartConditions struct {
+	installedBinary bool
+	recorded        bool // the user's wish has been recorded before
+	wantsOn         bool
+	systemdPresent  bool
+	unitEnabled     bool
+}
+
+type autostartAction int
+
+const (
+	autostartLeaveAlone autostartAction = iota
+	autostartEnableFirstRun
+	autostartReinstate
+	autostartReportUnavailable
+)
+
+// What a daemon start should do about autostart. Kept apart from the doing, so
+// the whole table is testable on a host without systemd.
+func autostartActionFor(c autostartConditions) autostartAction {
+	if !c.installedBinary {
+		return autostartLeaveAlone
+	}
+	if c.recorded && !c.wantsOn {
+		return autostartLeaveAlone // `autostart off` is never overridden
+	}
+	if !c.systemdPresent {
+		if c.recorded {
+			return autostartLeaveAlone // said once already, not on every start
+		}
+		return autostartReportUnavailable
+	}
+	if !c.recorded {
+		return autostartEnableFirstRun
+	}
+	if c.unitEnabled {
+		return autostartLeaveAlone
+	}
+	return autostartReinstate
+}
+
+// Install the unit and enable it for the next boot without starting it: the
+// caller is the running daemon, and `--now` would start a second copy that
+// dies on the single-instance lock. Returns "" on success, or why not.
+func enableAutostartForNextBoot() string {
+	if msg := writeAutostartUnit(); msg != "" {
+		return msg
+	}
+	if code, out := systemctlUser("enable", "gitwatchd"); code != 0 {
+		return "systemctl --user enable gitwatchd failed: " + out
+	}
+	enableLinger() // best effort, as for `autostart on`
+	return ""
+}
+
+// Make autostart match the recorded wish. The first start of an installed
+// gitwatchd turns it on: a daemon that doesn't come back after a reboot is not
+// doing the one job it has. Returns a line for the daemon log, or "" when
+// there was nothing to do.
+func reconcileAutostart() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	wantsOn, recorded := recordedAutostartWish()
+	conditions := autostartConditions{
+		installedBinary: isInstalledBinary(exe),
+		recorded:        recorded,
+		wantsOn:         wantsOn,
+		systemdPresent:  systemctlPresent(),
+	}
+	if conditions.systemdPresent {
+		conditions.unitEnabled = unitEnabled()
+	}
+	action := autostartActionFor(conditions)
+	if action == autostartLeaveAlone {
+		return ""
+	}
+	recordAutostartWish(true) // recorded before the outcome, so a failure is retried
+	if action == autostartReportUnavailable {
+		return "autostart: unavailable (systemd not found); to have the daemon come back " +
+			"after a reboot, run `gitwatchd start` from your session startup"
+	}
+	if msg := enableAutostartForNextBoot(); msg != "" {
+		return "autostart could not be enabled: " + msg
+	}
+	if action == autostartEnableFirstRun {
+		return "autostart: on (systemd user unit enabled on first run; " +
+			"turn it off with `gitwatchd autostart off`)"
+	}
+	return "autostart: the systemd user unit had gone missing, re-enabled it"
 }

@@ -36,7 +36,11 @@ func TestMain(m *testing.M) {
 }
 
 func runCLI(env []string, args ...string) (int, string) {
-	cmd := exec.Command(testBinary, args...)
+	return runBinary(testBinary, env, args...)
+}
+
+func runBinary(binary string, env []string, args ...string) (int, string) {
+	cmd := exec.Command(binary, args...)
 	cmd.Env = env
 	out, err := cmd.CombinedOutput()
 	code := 0
@@ -235,20 +239,7 @@ func TestAutostartDegradesClearlyWithoutSystemd(t *testing.T) {
 		t.Skip("this host runs systemd; the degrade path is exercised in plain containers")
 	}
 	home := t.TempDir()
-	env := isolatedEnv(home)
-	// A PATH with no systemctl.
-	bindir := filepath.Join(home, "bin")
-	os.MkdirAll(bindir, 0o755)
-	for _, tool := range []string{"git", "date", "sh", "bash"} {
-		if p, err := lookPathIn(os.Getenv("PATH"), tool); err == nil {
-			os.Symlink(p, filepath.Join(bindir, tool))
-		}
-	}
-	for i, e := range env {
-		if strings.HasPrefix(e, "PATH=") {
-			env[i] = "PATH=" + bindir
-		}
-	}
+	env := envWithoutSystemctl(home)
 	code, out := runCLI(env, "autostart", "on")
 	if code == 0 {
 		t.Error("autostart on must fail without systemd")
@@ -268,6 +259,116 @@ func TestAutostartDegradesClearlyWithoutSystemd(t *testing.T) {
 	}
 }
 
+// A daemon started from a build directory is a development copy: it leaves
+// the user's login setup, and the record of their wish, alone.
+func TestDaemonFromABuildDirectoryLeavesAutostartAlone(t *testing.T) {
+	if testBinary == "" {
+		t.Fatal("test binary did not build")
+	}
+	home := t.TempDir()
+	env := envWithoutSystemctl(home)
+	t.Cleanup(func() { killDaemonIfRunning(home) })
+
+	repo := newTestRepo(t)
+	if code, out := runCLI(env, "add", "-s", "0", repo.path); code != 0 {
+		t.Fatalf("add failed: %s", out)
+	}
+	if code, out := runCLI(env, "start"); code != 0 {
+		t.Fatalf("start: code=%d out=%s", code, out)
+	}
+	// Autostart is reconciled before the first repo is watched, so this line
+	// in the log means it has been and gone.
+	waitFor(t, 15*time.Second, "the daemon to watch the repo", func() bool {
+		return strings.Contains(daemonLogIn(home), "watching "+filepath.Base(repo.path)+" (")
+	})
+	if _, err := os.Stat(filepath.Join(home, "state", "autostart")); err == nil {
+		t.Error("a development copy must record no wish")
+	}
+	if _, err := os.Stat(filepath.Join(home, ".config")); err == nil {
+		t.Error("a development copy must write no unit")
+	}
+	if code, out := runCLI(env, "stop"); code != 0 {
+		t.Fatalf("stop: code=%d out=%s", code, out)
+	}
+}
+
+// The first daemon start of an installed gitwatchd onboards autostart without
+// being asked. With no systemd there is nothing to enable, so it records the
+// wish, says so once, and leaves the user a way to run at boot themselves.
+func TestFirstInstalledDaemonRunOnboardsAutostart(t *testing.T) {
+	if testBinary == "" {
+		t.Fatal("test binary did not build")
+	}
+	home := t.TempDir()
+	env := envWithoutSystemctl(home)
+	t.Cleanup(func() { killDaemonIfRunning(home) })
+	installed := filepath.Join(home, ".local", "bin", "gitwatchd")
+	os.MkdirAll(filepath.Dir(installed), 0o755)
+	binary, err := os.ReadFile(testBinary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(installed, binary, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	repo := newTestRepo(t)
+	if code, out := runBinary(installed, env, "add", "-s", "0", repo.path); code != 0 {
+		t.Fatalf("add failed: %s", out)
+	}
+	if code, out := runBinary(installed, env, "start"); code != 0 {
+		t.Fatalf("start: code=%d out=%s", code, out)
+	}
+	waitFor(t, 15*time.Second, "the recorded autostart wish", func() bool {
+		raw, _ := os.ReadFile(filepath.Join(home, "state", "autostart"))
+		return strings.TrimSpace(string(raw)) == "on"
+	})
+	if log := daemonLogIn(home); !strings.Contains(log, "systemd not found") ||
+		!strings.Contains(log, "gitwatchd start") {
+		t.Errorf("the log must explain and point at `gitwatchd start`:\n%s", log)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".config", "systemd")); err == nil {
+		t.Error("no unit may be written when systemd is absent")
+	}
+
+	// The wish is on record now, so a second start has nothing to say.
+	if code, out := runBinary(installed, env, "stop"); code != 0 {
+		t.Fatalf("stop: code=%d out=%s", code, out)
+	}
+	if code, out := runBinary(installed, env, "start"); code != 0 {
+		t.Fatalf("second start: code=%d out=%s", code, out)
+	}
+	watched := "watching " + filepath.Base(repo.path) + " ("
+	waitFor(t, 15*time.Second, "the restarted daemon to watch the repo", func() bool {
+		return strings.Count(daemonLogIn(home), watched) == 2
+	})
+	if n := strings.Count(daemonLogIn(home), "systemd not found"); n != 1 {
+		t.Errorf("autostart said it %d times; once is the whole point:\n%s", n, daemonLogIn(home))
+	}
+	if code, out := runBinary(installed, env, "stop"); code != 0 {
+		t.Fatalf("second stop: code=%d out=%s", code, out)
+	}
+}
+
+// An isolated environment whose PATH holds the tools gitwatchd runs and no
+// systemctl, so the no-systemd paths can be exercised on any host.
+func envWithoutSystemctl(home string) []string {
+	bindir := filepath.Join(home, "bin")
+	os.MkdirAll(bindir, 0o755)
+	for _, tool := range []string{"git", "date", "sh", "bash"} {
+		if p, err := lookPathIn(os.Getenv("PATH"), tool); err == nil {
+			os.Symlink(p, filepath.Join(bindir, tool))
+		}
+	}
+	env := isolatedEnv(home)
+	for i, e := range env {
+		if strings.HasPrefix(e, "PATH=") {
+			env[i] = "PATH=" + bindir
+		}
+	}
+	return env
+}
+
 func lookPathIn(path, tool string) (string, error) {
 	for _, dir := range strings.Split(path, ":") {
 		candidate := filepath.Join(dir, tool)
@@ -285,6 +386,11 @@ func daemonPidIn(home string) int {
 	}
 	pid, _ := strconv.Atoi(strings.TrimSpace(string(raw)))
 	return pid
+}
+
+func daemonLogIn(home string) string {
+	raw, _ := os.ReadFile(filepath.Join(home, "state", "daemon.log"))
+	return string(raw)
 }
 
 func killDaemonIfRunning(home string) {
