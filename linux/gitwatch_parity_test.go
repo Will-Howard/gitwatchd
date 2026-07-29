@@ -58,12 +58,12 @@ func stateOf(repo *testRepo, remote *bareRemote) repoState {
 	return s
 }
 
-// The upstream script, vendored once for the whole repo in the macOS test
-// suite; both implementations measure themselves against that same copy.
+// The upstream script, vendored once for the whole repo in oracle/; both
+// implementations measure themselves against that same copy.
 func gitwatchScript(t *testing.T) string {
 	t.Helper()
 	wd, _ := os.Getwd()
-	script := filepath.Join(wd, "..", "macos", "Tests", "Reference", "gitwatch.sh")
+	script := filepath.Join(wd, "..", "oracle", "gitwatch.sh")
 	if _, err := os.Stat(script); err != nil {
 		t.Fatalf("vendored gitwatch.sh not found at %s", script)
 	}
