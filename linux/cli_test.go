@@ -633,7 +633,8 @@ func TestTruncation(t *testing.T) {
 
 func TestBackoffSchedule(t *testing.T) {
 	want := []time.Duration{30 * time.Second, 60 * time.Second, 120 * time.Second,
-		240 * time.Second, 300 * time.Second, 300 * time.Second}
+		240 * time.Second, 480 * time.Second, 960 * time.Second,
+		30 * time.Minute, 30 * time.Minute}
 	for i, w := range want {
 		if got := backoffDelay(i + 1); got != w {
 			t.Errorf("after %d failures: got %v, want %v", i+1, got, w)

@@ -509,10 +509,10 @@ func (w *repoWatcher) runCycles() {
 	}
 }
 
-// Push retry backoff: 30s doubling to a 5 minute cap.
+// Push retry backoff: 30s doubling to a 30 minute cap.
 const (
 	backoffFirst = 30 * time.Second
-	backoffCap   = 300 * time.Second
+	backoffCap   = 30 * time.Minute
 )
 
 func backoffDelay(afterFailures int) time.Duration {
