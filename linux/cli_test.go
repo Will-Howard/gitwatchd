@@ -13,8 +13,7 @@ import (
 
 func withTemporaryConfig(t *testing.T) {
 	t.Helper()
-	spawnsDaemon = false
-	t.Cleanup(func() { spawnsDaemon = true })
+	t.Setenv("GITWATCHD_NO_SPAWN", "1")
 	dir := t.TempDir()
 	t.Setenv("GITWATCHD_CONFIG", filepath.Join(dir, "gitwatchd"))
 	t.Setenv("GITWATCHD_STATE_DIR", filepath.Join(dir, "state"))
@@ -485,7 +484,7 @@ func TestErrorLabelFlagsTheRow(t *testing.T) {
 }
 
 func TestOutcomeLabels(t *testing.T) {
-	cases := map[OutcomeKind]string{
+	cases := map[CommitOutcome]string{
 		PushFailed:     "push failing",
 		RebaseConflict: "rebase conflict",
 		CommitFailed:   "commit failing",

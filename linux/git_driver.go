@@ -9,22 +9,21 @@ import (
 
 // Thin wrapper around git.
 
-// What one auto-commit cycle (or push retry) accomplished. The git commands
-// and their order are gitwatch's; this only reports the result.
-type OutcomeKind int
+// What one auto-commit cycle (or push retry) accomplished.
+type CommitOutcome int
 
 const (
-	Clean          OutcomeKind = iota // nothing to commit
-	SkippedMerge                      // -M: merge in progress, cycle skipped
-	Committed                         // committed; no remote configured
-	Pushed                            // committed and pushed
-	CommitFailed                      // Detail carries the git error line
-	RebaseConflict                    // -R: pull --rebase hit a conflict
+	Clean          CommitOutcome = iota // nothing to commit
+	SkippedMerge                        // -M: merge in progress, cycle skipped
+	Committed                           // committed; no remote configured
+	Pushed                              // committed and pushed
+	CommitFailed                        // Detail carries the git error line
+	RebaseConflict                      // -R: pull --rebase hit a conflict
 	PushFailed
 )
 
 type Outcome struct {
-	Kind   OutcomeKind
+	Kind   CommitOutcome
 	Detail string
 }
 
@@ -133,24 +132,21 @@ func autoCommit(spec *RepoSpec) Outcome {
 		return Outcome{Kind: Clean}
 	}
 
-	// Upstream builds the message before `git add`, and so do we: the -c/-C
-	// message command (not ported yet) has to see the unstaged tree.
-	// Upstream's ${COMMITMSG/\%d/...}: the date splices into the first %d only.
+	// 1. Build the message before add: upstream's order, and -c/-C (not
+	// ported yet) must see the unstaged tree. Upstream's ${COMMITMSG/\%d/...}
+	// splices the date into the first %d only.
 	msg := strings.Replace(spec.Message, "%d", formattedDate(spec.DateFormat), 1)
 
-	// Upstream's GIT_ADD_ARGS: "--all ." scoped to the target directory,
-	// or just the file for a file target.
+	// 2. Stage upstream's GIT_ADD_ARGS: "--all ." scoped to the target
+	// directory, or just the file for a file target.
 	addTarget := "."
 	if spec.IsFileTarget() {
 		addTarget = spec.Path
 	}
 	gitRun([]string{"add", "--all", addTarget}, dir, spec.GitDir)
-	code, out := gitRun([]string{"commit", "-m", msg}, dir, spec.GitDir)
 
-	// gitwatch runs the pull (-R) and the push unconditionally after the
-	// commit, whether or not it succeeded, so a repo whose commit a hook
-	// blocks still pushes what is already committed. commitOutcome is
-	// reporting only.
+	// 3. Commit. commitOutcome is reporting only; it never gates step 4.
+	code, out := gitRun([]string{"commit", "-m", msg}, dir, spec.GitDir)
 	commitOutcome := Outcome{Kind: Committed}
 	if code != 0 {
 		// Repo-wide changes outside the watched subtree stage nothing.
@@ -163,8 +159,10 @@ func autoCommit(spec *RepoSpec) Outcome {
 		}
 	}
 
-	// No remote: never call push(), whose no-remote return would mask a
-	// commit failure.
+	// 4. Pull (-R) and push regardless of the commit result (gitwatch
+	// parity), so a repo whose commit a hook blocks still pushes what is
+	// already committed. Without a remote, skip push() entirely: its
+	// no-remote return would mask a commit failure.
 	if spec.Remote == "" {
 		return commitOutcome
 	}

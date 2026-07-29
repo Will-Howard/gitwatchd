@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,8 +17,59 @@ import (
 // the two implementations ship as one product and report one version.
 const version = "0.2.0"
 
-// Tests set this false so CLI calls don't spawn the real daemon.
-var spawnsDaemon = true
+const usageText = `gitwatchd - daemon that watches git repos and auto-commits changes
+
+USAGE
+  gitwatchd [flags] <path>     watch a repo
+  gitwatchd <command> [args]
+
+EXAMPLES
+  gitwatchd .                       watch the current repo, commit locally
+  gitwatchd -r origin .             also push every commit to origin
+  gitwatchd -r origin -b main -R .  two-way sync: fetch commits made on
+                                    other machines and rebase yours on top
+                                    before each push to origin/main
+  gitwatchd status                  see everything being watched
+  gitwatchd rm blog                 stop watching, by name or path
+
+COMMANDS
+  add [flags] <path>    watch a repo (bare ` + "`gitwatchd [flags] <path>`" + ` works too)
+  rm <name|path>        stop watching a repo
+  pause <name|path>     stop watching temporarily; the repo stays listed
+  resume <name|path>    start watching again and commit what piled up
+  status                everything being watched, in the terminal
+  start, stop           start or stop the daemon
+  autostart [on|off|status]
+                        run the daemon at boot (installs a systemd user unit)
+  config [path|edit]    print the config file path, or open it in your
+                        editor (the one ` + "`git commit`" + ` uses)
+  help                  show this help
+  version               print the version
+
+FLAGS (for add)
+  -s <secs>     Wait <secs> after the last change before committing, so a
+                batch of writes lands as one commit. Default: 2.
+  -r <remote>   Push to <remote> after every commit. Default: no push.
+  -b <branch>   Branch to push to. Without it, a plain ` + "`git push <remote>`" + `
+                decides. Only meaningful together with -r.
+  -R            Before each push, pull commits made elsewhere and rebase
+                yours on top (` + "`git pull --rebase <remote>`" + `). Use with -r
+                when more than one machine pushes to the same branch.
+  -m <msg>      Commit message; %d becomes the timestamp.
+                Default: "gitwatchd auto-commit (%d)".
+  -d <fmt>      Format string for that timestamp (see ` + "`man date`" + `).
+                Default: "+%Y-%m-%d %H:%M:%S".
+  -x <pattern>  Skip changes whose path matches this regular
+                expression (e.g. '\.log$' or 'build/').
+  -M            Skip committing while the repo has a merge in progress.
+  -f            Commit anything already pending as soon as watching
+                starts (daemon launch, or when the repo is added).
+  -g <path>     Location of the .git directory, if elsewhere (--git-dir).
+  --paused      Keep the repo in the config but don't watch it. This is
+                what ` + "`gitwatchd pause`" + ` sets.
+
+The daemon runs in the background and watches every repo listed in ~/.gitwatchd
+`
 
 type ConfigError struct {
 	Label    string // repo name, or the offending line for parse errors
@@ -178,10 +228,10 @@ func cliRemove(args []string) int {
 		warn("usage: gitwatchd rm <name|path>")
 		return 1
 	}
-	needle := args[0]
-	n := configRemove(needle)
+	nameOrPath := args[0]
+	n := configRemove(nameOrPath)
 	if n == 0 {
-		warn("no watched repo matches " + needle)
+		warn("no watched repo matches " + nameOrPath)
 		return 1
 	}
 	ensureDaemonRunning()
@@ -189,7 +239,7 @@ func cliRemove(args []string) int {
 	if n == 1 {
 		entries = "entry"
 	}
-	fmt.Printf("✓ stopped watching %s (%d %s removed)\n", needle, n, entries)
+	fmt.Printf("✓ stopped watching %s (%d %s removed)\n", nameOrPath, n, entries)
 	return 0
 }
 
@@ -202,12 +252,12 @@ func cliSetPaused(args []string, paused bool) int {
 		warn("usage: gitwatchd " + verb + " <name|path>")
 		return 1
 	}
-	needle := args[0]
-	n := configSetPaused(needle, paused)
+	nameOrPath := args[0]
+	n := configSetPaused(nameOrPath, paused)
 	if n == 0 {
 		known := false
 		for _, s := range configSpecs() {
-			if configMatches(s, needle) {
+			if configMatches(s, nameOrPath) {
 				known = true
 			}
 		}
@@ -216,17 +266,17 @@ func cliSetPaused(args []string, paused bool) int {
 			if paused {
 				state = "paused"
 			}
-			warn(needle + " is already " + state)
+			warn(nameOrPath + " is already " + state)
 		} else {
-			warn("no watched repo matches " + needle)
+			warn("no watched repo matches " + nameOrPath)
 		}
 		return 1
 	}
 	ensureDaemonRunning()
 	if paused {
-		fmt.Printf("⏸ paused %s  (resume with: gitwatchd resume %s)\n", needle, needle)
+		fmt.Printf("⏸ paused %s  (resume with: gitwatchd resume %s)\n", nameOrPath, nameOrPath)
 	} else {
-		fmt.Printf("✓ resumed %s; catching up on anything that changed meanwhile\n", needle)
+		fmt.Printf("✓ resumed %s; catching up on anything that changed meanwhile\n", nameOrPath)
 	}
 	return 0
 }
@@ -389,7 +439,11 @@ func cliStart() int {
 		time.Sleep(100 * time.Millisecond)
 	}
 	if !isDaemonRunning() {
-		warn("daemon did not come up; check " + daemonLogHint())
+		logs := logfilePath()
+		if unitInstalled() && systemctlPresent() {
+			logs = "journalctl --user -u gitwatchd"
+		}
+		warn("daemon did not come up; check " + logs)
 		return 1
 	}
 	fmt.Println("✓ daemon started")
@@ -441,17 +495,10 @@ func spawnDaemon() error {
 	return cmd.Process.Release()
 }
 
-func daemonLogHint() string {
-	if unitInstalled() && systemctlPresent() {
-		return "journalctl --user -u gitwatchd"
-	}
-	return logfilePath()
-}
-
 // Best-effort: start the daemon if it isn't running (the running daemon
 // live-reloads the config, so this is only for the cold case).
 func ensureDaemonRunning() {
-	if !spawnsDaemon || os.Getenv("GITWATCHD_NO_SPAWN") != "" || isDaemonRunning() {
+	if os.Getenv("GITWATCHD_NO_SPAWN") != "" || isDaemonRunning() {
 		return
 	}
 	if unitInstalled() && systemctlPresent() {
@@ -481,10 +528,10 @@ func configEnsureExists() {
 	}
 	template := `# gitwatchd: one repo per line.
 #   [-s secs] [-r remote [-b branch]] [-R] [-m msg] [-x pattern] [-M] [--paused] <path>
-# ` + "`gitwatchd help`" + ` explains each flag. Examples:
+# 'gitwatchd help' explains each flag. Examples:
 #   ~/code/my-notes
 #   -s 5 -r origin -b main ~/code/blog
-# (from a terminal, ` + "`gitwatchd .`" + ` adds the current repo here for you)
+# (from a terminal, 'gitwatchd .' adds the current repo here for you)
 `
 	os.WriteFile(configPath(), []byte(template), 0o644)
 }
@@ -558,11 +605,11 @@ func configAppend(line string) {
 	os.WriteFile(configPath(), []byte(text), 0o644)
 }
 
-func configMatches(spec *RepoSpec, needle string) bool {
-	return spec.Path == expandTilde(needle) || spec.Name() == needle || spec.Path == needle
+func configMatches(spec *RepoSpec, nameOrPath string) bool {
+	return spec.Path == expandTilde(nameOrPath) || spec.Name() == nameOrPath || spec.Path == nameOrPath
 }
 
-func configRemove(needle string) int {
+func configRemove(nameOrPath string) int {
 	raw, err := os.ReadFile(configPath())
 	if err != nil {
 		return 0
@@ -576,7 +623,7 @@ func configRemove(needle string) int {
 			continue
 		}
 		spec, _ := parseRepoSpec(tokenize(line))
-		if spec != nil && configMatches(spec, needle) {
+		if spec != nil && configMatches(spec, nameOrPath) {
 			removed++
 			continue
 		}
@@ -586,11 +633,11 @@ func configRemove(needle string) int {
 	return removed
 }
 
-// Flip the --paused token on config lines matching `needle` (by full
+// Flip the --paused token on config lines matching `nameOrPath` (by full
 // path or repo name, like remove). Pause lives in the config, not daemon
 // state, so it survives daemon and machine restarts. Returns the number
 // of lines changed.
-func configSetPaused(needle string, paused bool) int {
+func configSetPaused(nameOrPath string, paused bool) int {
 	raw, err := os.ReadFile(configPath())
 	if err != nil {
 		return 0
@@ -604,7 +651,7 @@ func configSetPaused(needle string, paused bool) int {
 			continue
 		}
 		spec, _ := parseRepoSpec(tokenize(trimmed))
-		if spec == nil || !configMatches(spec, needle) {
+		if spec == nil || !configMatches(spec, nameOrPath) {
 			lines = append(lines, rawLine)
 			continue
 		}
@@ -622,9 +669,6 @@ func configSetPaused(needle string, paused bool) int {
 	return changed
 }
 
-// The pure rewrite behind configSetPaused: if `line` watches `path` and its
-// paused state differs, return the line with --paused added (in front)
-// or removed; else ok=false for "leave this line alone".
 func togglingPaused(line string, path string, paused bool) (string, bool) {
 	tokens := tokenize(line)
 	spec, _ := parseRepoSpec(tokens)
@@ -647,8 +691,6 @@ func togglingPaused(line string, path string, paused bool) (string, bool) {
 	return strings.Join(quoted, " "), true
 }
 
-// The tokenizer has no escape syntax: a value with both quote kinds
-// cannot round-trip.
 func quoteIfNeeded(s string) string {
 	if strings.Contains(s, `"`) && !strings.Contains(s, "'") {
 		return "'" + s + "'"
@@ -758,7 +800,7 @@ func parseRepoSpec(args []string) (*RepoSpec, string) {
 				spec.GitDir = v
 			}
 		case "-e":
-			next() // inotify events: accepted, no-op (we watch a fixed gitwatch-like set)
+			next() // -e accepted for gitwatch compatibility; ignored
 		case "--paused":
 			spec.Paused = true
 		default:
@@ -848,38 +890,6 @@ func retryLine(lastTried time.Time, nextRetry *time.Time, now time.Time) string 
 		return tried + " · retrying now"
 	}
 	return tried + " · retrying in " + span(dt)
-}
-
-func truncated(s string, max int) string {
-	runes := []rune(s)
-	if len(runes) <= max {
-		return s
-	}
-	return string(runes[:max-1]) + "…"
-}
-
-func ago(seconds float64) string {
-	if seconds < 5 {
-		return "just now"
-	}
-	return span(seconds) + " ago"
-}
-
-func span(seconds float64) string {
-	s := int(math.Round(seconds))
-	if s < 1 {
-		s = 1
-	}
-	if s < 90 {
-		return fmt.Sprintf("%ds", s)
-	}
-	if s < 90*60 {
-		return fmt.Sprintf("%dm", int(math.Round(float64(s)/60)))
-	}
-	if s < 36*3600 {
-		return fmt.Sprintf("%dh", int(math.Round(float64(s)/3600)))
-	}
-	return fmt.Sprintf("%dd", int(math.Round(float64(s)/86400)))
 }
 
 // Autostart = a systemd user unit, the standard way for a per-user daemon to
@@ -1005,57 +1015,3 @@ func autostartStatus() int {
 	}
 	return 0
 }
-
-const usageText = `gitwatchd - daemon that watches git repos and auto-commits changes
-
-USAGE
-  gitwatchd [flags] <path>     watch a repo
-  gitwatchd <command> [args]
-
-EXAMPLES
-  gitwatchd .                       watch the current repo, commit locally
-  gitwatchd -r origin .             also push every commit to origin
-  gitwatchd -r origin -b main -R .  two-way sync: fetch commits made on
-                                    other machines and rebase yours on top
-                                    before each push to origin/main
-  gitwatchd status                  see everything being watched
-  gitwatchd rm blog                 stop watching, by name or path
-
-COMMANDS
-  add [flags] <path>    watch a repo (bare ` + "`gitwatchd [flags] <path>`" + ` works too)
-  rm <name|path>        stop watching a repo
-  pause <name|path>     stop watching temporarily; the repo stays listed
-  resume <name|path>    start watching again and commit what piled up
-  status                everything being watched, in the terminal
-  start, stop           start or stop the daemon
-  autostart [on|off|status]
-                        run the daemon at boot (installs a systemd user unit)
-  config [path|edit]    print the config file path, or open it in your
-                        editor (the one ` + "`git commit`" + ` uses)
-  help                  show this help
-  version               print the version
-
-FLAGS (for add)
-  -s <secs>     Wait <secs> after the last change before committing, so a
-                batch of writes lands as one commit. Default: 2.
-  -r <remote>   Push to <remote> after every commit. Default: no push.
-  -b <branch>   Branch to push to. Without it, a plain ` + "`git push <remote>`" + `
-                decides. Only meaningful together with -r.
-  -R            Before each push, pull commits made elsewhere and rebase
-                yours on top (` + "`git pull --rebase <remote>`" + `). Use with -r
-                when more than one machine pushes to the same branch.
-  -m <msg>      Commit message; %d becomes the timestamp.
-                Default: "gitwatchd auto-commit (%d)".
-  -d <fmt>      Format string for that timestamp (see ` + "`man date`" + `).
-                Default: "+%Y-%m-%d %H:%M:%S".
-  -x <pattern>  Skip changes whose path matches this regular
-                expression (e.g. '\.log$' or 'build/').
-  -M            Skip committing while the repo has a merge in progress.
-  -f            Commit anything already pending as soon as watching
-                starts (daemon launch, or when the repo is added).
-  -g <path>     Location of the .git directory, if elsewhere (--git-dir).
-  --paused      Keep the repo in the config but don't watch it. This is
-                what ` + "`gitwatchd pause`" + ` sets.
-
-The daemon runs in the background and watches every repo listed in ~/.gitwatchd
-`

@@ -136,6 +136,43 @@ func waitForDaemonPickup(t *testing.T, repo *testRepo, change func()) {
 	t.Fatal("the daemon never picked up the newly added repo")
 }
 
+// The one production path the in-process CLI tests cannot reach: `add`
+// finding no daemon and spawning one off its own binary (in-process,
+// os.Executable() is the go-test binary). Runs without GITWATCHD_NO_SPAWN.
+func TestAddSpawnsTheDaemon(t *testing.T) {
+	if testBinary == "" {
+		t.Fatal("test binary did not build")
+	}
+	home := t.TempDir()
+	var env []string
+	for _, e := range isolatedEnv(home) {
+		if !strings.HasPrefix(e, "GITWATCHD_NO_SPAWN=") {
+			env = append(env, e)
+		}
+	}
+	t.Cleanup(func() { killDaemonIfRunning(home) })
+
+	repo := newTestRepo(t)
+	if code, out := runCLI(env, "add", "-s", "0", repo.path); code != 0 {
+		t.Fatalf("add failed: %s", out)
+	}
+	waitFor(t, 15*time.Second, "the daemon add spawned", func() bool {
+		_, out := runCLI(env, "status")
+		return strings.Contains(out, "daemon:  running")
+	})
+	pid := daemonPidIn(home)
+	if pid <= 0 {
+		t.Fatal("the spawned daemon wrote no pidfile")
+	}
+
+	if code, out := runCLI(env, "stop"); code != 0 || !strings.Contains(out, "✓ daemon stopped") {
+		t.Fatalf("stop: code=%d out=%s", code, out)
+	}
+	if err := syscall.Kill(pid, 0); err == nil {
+		t.Errorf("the spawned daemon (pid %d) is still alive after stop", pid)
+	}
+}
+
 func TestAutostartDegradesClearlyWithoutSystemd(t *testing.T) {
 	if testBinary == "" {
 		t.Fatal("test binary did not build")
@@ -187,12 +224,17 @@ func lookPathIn(path, tool string) (string, error) {
 	return "", os.ErrNotExist
 }
 
-func killDaemonIfRunning(home string) {
+func daemonPidIn(home string) int {
 	raw, err := os.ReadFile(filepath.Join(home, "state", "gitwatchd.pid"))
 	if err != nil {
-		return
+		return 0
 	}
-	if pid, _ := strconv.Atoi(strings.TrimSpace(string(raw))); pid > 0 {
+	pid, _ := strconv.Atoi(strings.TrimSpace(string(raw)))
+	return pid
+}
+
+func killDaemonIfRunning(home string) {
+	if pid := daemonPidIn(home); pid > 0 {
 		syscall.Kill(pid, syscall.SIGKILL)
 	}
 }
