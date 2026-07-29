@@ -341,21 +341,25 @@ func TestAutostartDecisionTable(t *testing.T) {
 	}
 }
 
-func TestAutostartWishIsRecordedInItsOwnFile(t *testing.T) {
+func TestAutostartWishIsRecordedAsLaunchAtLogin(t *testing.T) {
 	withTemporaryConfig(t)
-	if _, recorded := recordedAutostartWish(); recorded {
+	if _, recorded := launchAtLogin(); recorded {
 		t.Error("nothing is on record until the user or a first run says so")
 	}
-	recordAutostartWish(true)
-	if on, recorded := recordedAutostartWish(); !on || !recorded {
+	setLaunchAtLogin(true)
+	if on, recorded := launchAtLogin(); !on || !recorded {
 		t.Errorf("after recording on: on=%v recorded=%v", on, recorded)
 	}
-	recordAutostartWish(false)
-	if on, recorded := recordedAutostartWish(); on || !recorded {
+	setLaunchAtLogin(false)
+	if on, recorded := launchAtLogin(); on || !recorded {
 		t.Errorf("after recording off: on=%v recorded=%v", on, recorded)
 	}
-	if _, err := os.Stat(statePath()); err == nil {
-		t.Error("the wish must not be written into the daemon's error state file")
+	raw, err := os.ReadFile(statePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"launch-at-login": "off"`) {
+		t.Errorf("the setting must be readable under its own key:\n%s", raw)
 	}
 }
 

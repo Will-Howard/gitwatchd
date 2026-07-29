@@ -300,7 +300,7 @@ func cliStatus() int {
 	}
 	daemonErrors := map[string]RepoStatus{}
 	if running {
-		daemonErrors = daemonState.statuses()
+		daemonErrors = repoStatuses()
 	}
 	repos := "repos"
 	if len(specs) == 1 {
@@ -1002,7 +1002,7 @@ func autostartOn() int {
 	}
 	// Recorded before the outcome is known, so that a failure here is retried
 	// on a later daemon start instead of being forgotten.
-	recordAutostartWish(true)
+	setLaunchAtLogin(true)
 	if msg := writeAutostartUnit(); msg != "" {
 		warn(msg)
 		return 1
@@ -1030,7 +1030,7 @@ func autostartOn() int {
 }
 
 func autostartOff() int {
-	recordAutostartWish(false) // a standing opt-out: no later run turns it back on
+	setLaunchAtLogin(false) // a standing opt-out: no later run turns it back on
 	if !systemctlPresent() {
 		warn("systemd not found: nothing to turn off (autostart was never installed)")
 		return 1
@@ -1068,28 +1068,9 @@ func autostartStatus() int {
 	return 0
 }
 
-// First-run onboarding: the daemon matches autostart to the user's recorded
-// wish on every start, so an installed gitwatchd ends up running at boot
+// First-run onboarding: the daemon matches autostart to the launch-at-login
+// setting on every start, so an installed gitwatchd ends up running at boot
 // without anyone asking for it.
-
-// The wish, as its own small file in the state dir: "on", "off", or absent
-// when the user has never said either way.
-func recordedAutostartWish() (wantsOn bool, recorded bool) {
-	raw, err := os.ReadFile(autostartWishPath())
-	if err != nil {
-		return false, false
-	}
-	return strings.TrimSpace(string(raw)) != "off", true
-}
-
-func recordAutostartWish(on bool) {
-	os.MkdirAll(stateDir(), 0o755)
-	value := "off\n"
-	if on {
-		value = "on\n"
-	}
-	os.WriteFile(autostartWishPath(), []byte(value), 0o644)
-}
 
 // install.sh and `make uninstall` know three destinations; a binary anywhere
 // else (a build directory, a checkout) is a development copy, which onboarding
@@ -1172,7 +1153,7 @@ func reconcileAutostart() string {
 	if err != nil {
 		return ""
 	}
-	wantsOn, recorded := recordedAutostartWish()
+	wantsOn, recorded := launchAtLogin()
 	conditions := autostartConditions{
 		installedBinary: isInstalledBinary(exe),
 		recorded:        recorded,
@@ -1186,7 +1167,7 @@ func reconcileAutostart() string {
 	if action == autostartLeaveAlone {
 		return ""
 	}
-	recordAutostartWish(true) // recorded before the outcome, so a failure is retried
+	setLaunchAtLogin(true) // recorded before the outcome, so a failure is retried
 	if action == autostartReportUnavailable {
 		return "autostart: unavailable (systemd not found); to have the daemon come back " +
 			"after a reboot, run `gitwatchd start` from your session startup"

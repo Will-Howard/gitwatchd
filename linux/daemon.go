@@ -30,13 +30,10 @@ func stateDir() string {
 	return filepath.Join(base, "gitwatchd")
 }
 
-func statePath() string   { return filepath.Join(stateDir(), "state.json") }
-func pidfilePath() string { return filepath.Join(stateDir(), "gitwatchd.pid") }
-func logfilePath() string { return filepath.Join(stateDir(), "daemon.log") }
-
-// The autostart wish gets its own file: state.json is the daemon's error
-// channel for `status`, written whole on every change.
-func autostartWishPath() string { return filepath.Join(stateDir(), "autostart") }
+func statePath() string     { return filepath.Join(stateDir(), "state.json") }
+func stateLockPath() string { return filepath.Join(stateDir(), "state.lock") }
+func pidfilePath() string   { return filepath.Join(stateDir(), "gitwatchd.pid") }
+func logfilePath() string   { return filepath.Join(stateDir(), "daemon.log") }
 
 // The event set gitwatch passes to inotifywait:
 // close_write,move,move_self,delete,create,modify.
@@ -54,66 +51,119 @@ type RepoStatus struct {
 	NextRetry   *int64 `json:"nextRetry,omitempty"`
 }
 
-// The state file: one JSON object of RepoStatus keyed by repo path. The daemon
-// is the only writer, every gitwatchd process a reader.
-type stateFile struct {
-	mu sync.Mutex // one whole-file rewrite at a time
+// Everything gitwatchd persists: settings as top-level keys, and per-repo error
+// state under "repos", keyed by absolute path (a healthy repo has no entry).
+//
+// This shape is the cross-platform contract. macOS keeps the same values in a
+// SQLite key-value store today and moves onto this file later, so the setting
+// names and their "on"/"off" values are the ones in macos/Sources/StateDB.swift.
+// The file is written pretty-printed, in a stable key order, because it is meant
+// to be read and diffed by people.
+type persistedState struct {
+	LaunchAtLogin string                `json:"launch-at-login,omitempty"` // "on", "off", absent: never asked
+	Repos         map[string]RepoStatus `json:"repos,omitempty"`
 }
-
-var daemonState stateFile
 
 // Takes no lock: writes land by rename, so a reader always sees one whole
-// version of the file.
-func (s *stateFile) statuses() map[string]RepoStatus {
+// version of the file. Absent, empty or unreadable state reads as empty.
+func readState() persistedState {
 	raw, err := os.ReadFile(statePath())
 	if err != nil {
-		return map[string]RepoStatus{}
+		return persistedState{}
 	}
-	var out map[string]RepoStatus
-	if json.Unmarshal(raw, &out) != nil || out == nil {
-		return map[string]RepoStatus{}
+	var s persistedState
+	if json.Unmarshal(raw, &s) != nil {
+		return persistedState{}
 	}
-	return out
+	return s
 }
 
-// Record one repo's error state, or clear it when status is nil.
-func (s *stateFile) setStatus(repoPath string, status *RepoStatus) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	statuses := s.statuses()
-	if status == nil {
-		delete(statuses, repoPath)
-	} else {
-		statuses[repoPath] = *status
-	}
-	s.write(statuses)
-}
-
-// Forget the repos that have left the config.
-func (s *stateFile) keepOnly(watched map[string]bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	statuses := s.statuses()
-	for path := range statuses {
-		if !watched[path] {
-			delete(statuses, path)
-		}
-	}
-	s.write(statuses)
-}
-
-func (s *stateFile) write(statuses map[string]RepoStatus) {
+// Apply one read-modify-write to the state file under an exclusive lock. Two
+// processes write it (the daemon publishes repo state, the CLI records
+// settings), and a whole-file rewrite from a stale read would drop the other's
+// update.
+//
+// The lock is a file of its own, and never state.json: writes land by renaming
+// a temp file over state.json, so a lock taken on state.json itself would be
+// left holding an unlinked inode while the next writer locked the file that
+// replaced it, and both would proceed at once.
+func updateState(change func(*persistedState)) {
 	os.MkdirAll(stateDir(), 0o755)
-	raw, err := json.Marshal(statuses)
+	lock, err := os.OpenFile(stateLockPath(), os.O_RDWR|os.O_CREATE, 0o644)
 	if err != nil {
 		return
 	}
+	defer lock.Close()
+	if syscall.Flock(int(lock.Fd()), syscall.LOCK_EX) != nil {
+		return
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+
+	s := readState()
+	change(&s)
+	writeState(s)
+}
+
+func writeState(s persistedState) {
+	raw, err := json.MarshalIndent(s, "", "  ")
+	if err != nil {
+		return
+	}
+	raw = append(raw, '\n')
 	// Write beside the file and rename over it, so no reader ever sees a
 	// half-written state.
 	tmp := statePath() + ".tmp"
 	if os.WriteFile(tmp, raw, 0o644) == nil {
 		os.Rename(tmp, statePath())
 	}
+}
+
+func repoStatuses() map[string]RepoStatus {
+	statuses := readState().Repos
+	if statuses == nil {
+		return map[string]RepoStatus{}
+	}
+	return statuses
+}
+
+// Record one repo's error state, or clear it when status is nil.
+func setRepoStatus(repoPath string, status *RepoStatus) {
+	updateState(func(s *persistedState) {
+		if status == nil {
+			delete(s.Repos, repoPath)
+			return
+		}
+		if s.Repos == nil {
+			s.Repos = map[string]RepoStatus{}
+		}
+		s.Repos[repoPath] = *status
+	})
+}
+
+// Forget the repos that have left the config.
+func keepOnlyRepos(watched map[string]bool) {
+	updateState(func(s *persistedState) {
+		for path := range s.Repos {
+			if !watched[path] {
+				delete(s.Repos, path)
+			}
+		}
+	})
+}
+
+// Whether the user wants the daemon started at login, and whether anyone has
+// said either way yet.
+func launchAtLogin() (on bool, recorded bool) {
+	value := readState().LaunchAtLogin
+	return value != "off", value != ""
+}
+
+func setLaunchAtLogin(on bool) {
+	value := "off"
+	if on {
+		value = "on"
+	}
+	updateState(func(s *persistedState) { s.LaunchAtLogin = value })
 }
 
 // The running daemon: one watcher per watchable repo in the config, kept in
@@ -184,7 +234,7 @@ func (d *daemon) reloadConfig() {
 		desired[s.Path] = s
 		watched[s.Path] = true
 	}
-	daemonState.keepOnly(watched)
+	keepOnlyRepos(watched)
 
 	for path, w := range d.watchers {
 		s, wanted := desired[path]
@@ -203,7 +253,7 @@ func (d *daemon) reloadConfig() {
 		if _, running := d.watchers[path]; running {
 			continue
 		}
-		w, err := newRepoWatcher(s, daemonState.setStatus, d.logf)
+		w, err := newRepoWatcher(s, setRepoStatus, d.logf)
 		if err != nil {
 			d.logf("could not watch %s: %v", s.Name(), err)
 			continue

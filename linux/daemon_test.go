@@ -281,7 +281,7 @@ func TestDaemonFromABuildDirectoryLeavesAutostartAlone(t *testing.T) {
 	waitFor(t, 15*time.Second, "the daemon to watch the repo", func() bool {
 		return strings.Contains(daemonLogIn(home), "watching "+filepath.Base(repo.path)+" (")
 	})
-	if _, err := os.Stat(filepath.Join(home, "state", "autostart")); err == nil {
+	if strings.Contains(stateFileIn(home), "launch-at-login") {
 		t.Error("a development copy must record no wish")
 	}
 	if _, err := os.Stat(filepath.Join(home, ".config")); err == nil {
@@ -320,8 +320,7 @@ func TestFirstInstalledDaemonRunOnboardsAutostart(t *testing.T) {
 		t.Fatalf("start: code=%d out=%s", code, out)
 	}
 	waitFor(t, 15*time.Second, "the recorded autostart wish", func() bool {
-		raw, _ := os.ReadFile(filepath.Join(home, "state", "autostart"))
-		return strings.TrimSpace(string(raw)) == "on"
+		return strings.Contains(stateFileIn(home), `"launch-at-login": "on"`)
 	})
 	if log := daemonLogIn(home); !strings.Contains(log, "systemd not found") ||
 		!strings.Contains(log, "gitwatchd start") {
@@ -390,6 +389,11 @@ func daemonPidIn(home string) int {
 
 func daemonLogIn(home string) string {
 	raw, _ := os.ReadFile(filepath.Join(home, "state", "daemon.log"))
+	return string(raw)
+}
+
+func stateFileIn(home string) string {
+	raw, _ := os.ReadFile(filepath.Join(home, "state", "state.json"))
 	return string(raw)
 }
 
@@ -509,5 +513,71 @@ func TestWatchLimitExhaustionSurfacesAsRepoState(t *testing.T) {
 	}
 	if !strings.Contains(published.Detail, "max_user_watches") {
 		t.Errorf("the fix should be named: %q", published.Detail)
+	}
+}
+
+// Settings and repo state share one file, so each writer has to leave the
+// other's half alone.
+func TestStateFileKeepsSettingsAndRepoStateApart(t *testing.T) {
+	t.Setenv("GITWATCHD_STATE_DIR", filepath.Join(t.TempDir(), "state"))
+	setRepoStatus("/repo/one", &RepoStatus{ErrorLabel: "push failing", Attempts: 3})
+	setLaunchAtLogin(false)
+
+	s := readState()
+	if s.LaunchAtLogin != "off" || s.Repos["/repo/one"].Attempts != 3 {
+		t.Fatalf("recording a setting lost the repo state: %+v", s)
+	}
+	setRepoStatus("/repo/one", nil)
+	if s := readState(); s.LaunchAtLogin != "off" || len(s.Repos) != 0 {
+		t.Errorf("clearing a repo took the setting with it: %+v", s)
+	}
+}
+
+// The daemon and the CLI both rewrite the whole file, so each takes an
+// exclusive lock for one read-modify-write. Holding that lock here keeps the
+// real binary's `autostart off` waiting until a repo status has landed, which
+// its own update then has to preserve.
+func TestStateFileWritesAreArbitratedBetweenProcesses(t *testing.T) {
+	if testBinary == "" {
+		t.Fatal("test binary did not build")
+	}
+	home := t.TempDir()
+	stateDirectory := filepath.Join(home, "state")
+	t.Setenv("GITWATCHD_STATE_DIR", stateDirectory)
+	os.MkdirAll(stateDirectory, 0o755)
+
+	lock, err := os.OpenFile(filepath.Join(stateDirectory, "state.lock"), os.O_RDWR|os.O_CREATE, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+
+	recorded := make(chan struct{})
+	go func() {
+		defer close(recorded)
+		runCLI(isolatedEnv(home), "autostart", "off")
+	}()
+	time.Sleep(500 * time.Millisecond)
+	if strings.Contains(stateFileIn(home), "launch-at-login") {
+		t.Fatal("the other writer got in while the lock was held")
+	}
+
+	// The daemon's read-modify-write, by hand: this test already holds the lock
+	// updateState would wait for.
+	s := readState()
+	s.Repos = map[string]RepoStatus{"/repo/one": {ErrorLabel: "push failing", Attempts: 1}}
+	writeState(s)
+	syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+
+	<-recorded
+	final := readState()
+	if final.LaunchAtLogin != "off" {
+		t.Errorf("the waiting writer's setting never landed: %+v", final)
+	}
+	if _, ok := final.Repos["/repo/one"]; !ok {
+		t.Errorf("the waiting writer dropped the repo state written meanwhile: %+v", final)
 	}
 }
