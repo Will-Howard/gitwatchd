@@ -49,7 +49,7 @@ enum GitwatchReference {
     /// tests work regardless of the working directory.
     static let script = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()
-        .appendingPathComponent("Reference/gitwatch.sh").path
+        .appendingPathComponent("../../oracle/gitwatch.sh").path
 
     /// A watcher stub that exits immediately: gitwatch runs its -f startup
     /// commit, the watch pipe hits EOF, and the script terminates.
