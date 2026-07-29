@@ -181,9 +181,7 @@ func TestAddSpawnsTheDaemon(t *testing.T) {
 	}
 }
 
-// A daemon that will not go away on SIGTERM: this same test binary
-// re-executed, holding the pidfile lock `gitwatchd stop` reads the daemon's
-// liveness from.
+// This test binary re-executed: holds the pidfile lock and ignores SIGTERM.
 const stubbornDaemonEnv = "GITWATCHD_TEST_STUBBORN_DAEMON"
 
 func holdTheDaemonLockIgnoringSIGTERM() {
@@ -259,8 +257,6 @@ func TestAutostartDegradesClearlyWithoutSystemd(t *testing.T) {
 	}
 }
 
-// A daemon started from a build directory is a development copy: it leaves
-// the user's login setup, and the record of their wish, alone.
 func TestDaemonFromABuildDirectoryLeavesAutostartAlone(t *testing.T) {
 	if testBinary == "" {
 		t.Fatal("test binary did not build")
@@ -276,8 +272,7 @@ func TestDaemonFromABuildDirectoryLeavesAutostartAlone(t *testing.T) {
 	if code, out := runCLI(env, "start"); code != 0 {
 		t.Fatalf("start: code=%d out=%s", code, out)
 	}
-	// Autostart is reconciled before the first repo is watched, so this line
-	// in the log means it has been and gone.
+	// Reconcile runs before the first repo is watched, so this log line means it is done.
 	waitFor(t, 15*time.Second, "the daemon to watch the repo", func() bool {
 		return strings.Contains(daemonLogIn(home), "watching "+filepath.Base(repo.path)+" (")
 	})
@@ -292,9 +287,6 @@ func TestDaemonFromABuildDirectoryLeavesAutostartAlone(t *testing.T) {
 	}
 }
 
-// The first daemon start of an installed gitwatchd onboards autostart without
-// being asked. With no systemd there is nothing to enable, so it records the
-// wish, says so once, and leaves the user a way to run at boot themselves.
 func TestFirstInstalledDaemonRunOnboardsAutostart(t *testing.T) {
 	if testBinary == "" {
 		t.Fatal("test binary did not build")
@@ -349,8 +341,7 @@ func TestFirstInstalledDaemonRunOnboardsAutostart(t *testing.T) {
 	}
 }
 
-// An isolated environment whose PATH holds the tools gitwatchd runs and no
-// systemctl, so the no-systemd paths can be exercised on any host.
+// PATH holds the tools gitwatchd runs but no systemctl, so no-systemd paths run on any host.
 func envWithoutSystemctl(home string) []string {
 	bindir := filepath.Join(home, "bin")
 	os.MkdirAll(bindir, 0o755)
@@ -516,8 +507,6 @@ func TestWatchLimitExhaustionSurfacesAsRepoState(t *testing.T) {
 	}
 }
 
-// Settings and repo state share one file, so each writer has to leave the
-// other's half alone.
 func TestStateFileKeepsSettingsAndRepoStateApart(t *testing.T) {
 	t.Setenv("GITWATCHD_STATE_DIR", filepath.Join(t.TempDir(), "state"))
 	setRepoStatus("/repo/one", &RepoStatus{ErrorLabel: "push failing", Attempts: 3})
@@ -533,10 +522,8 @@ func TestStateFileKeepsSettingsAndRepoStateApart(t *testing.T) {
 	}
 }
 
-// The daemon and the CLI both rewrite the whole file, so each takes an
-// exclusive lock for one read-modify-write. Holding that lock here keeps the
-// real binary's `autostart off` waiting until a repo status has landed, which
-// its own update then has to preserve.
+// Holding the flock here keeps the binary's `autostart off` waiting until a
+// repo status has landed, which its own update then has to preserve.
 func TestStateFileWritesAreArbitratedBetweenProcesses(t *testing.T) {
 	if testBinary == "" {
 		t.Fatal("test binary did not build")
@@ -565,8 +552,7 @@ func TestStateFileWritesAreArbitratedBetweenProcesses(t *testing.T) {
 		t.Fatal("the other writer got in while the lock was held")
 	}
 
-	// The daemon's read-modify-write, by hand: this test already holds the lock
-	// updateState would wait for.
+	// By hand: this test already holds the lock updateState would wait for.
 	s := readState()
 	s.Repos = map[string]RepoStatus{"/repo/one": {ErrorLabel: "push failing", Attempts: 1}}
 	writeState(s)

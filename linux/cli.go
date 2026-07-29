@@ -471,8 +471,7 @@ func cliStop() int {
 		return 0
 	}
 
-	// `stop` has to end with the daemon stopped, so a process that ignores
-	// SIGTERM (wedged in a git call, say) gets SIGKILL rather than advice.
+	// A daemon wedged in a git call ignores SIGTERM; stop still has to win.
 	pid := daemonPid()
 	if pid <= 0 {
 		warn("daemon did not exit and its pidfile names no process to kill")
@@ -487,7 +486,6 @@ func cliStop() int {
 	return 0
 }
 
-// Poll until the daemon has released its lock, or the timeout runs out.
 func waitForDaemonExit(timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	for {
@@ -955,8 +953,7 @@ func unitEnabled() bool {
 	return out == "enabled"
 }
 
-// Write the systemd user unit for the running binary, so systemd knows what
-// to run. Returns "" on success, or why not.
+// Returns "" on success, or why not.
 func writeAutostartUnit() string {
 	exe, err := os.Executable()
 	if err != nil {
@@ -984,8 +981,7 @@ WantedBy=default.target
 	return ""
 }
 
-// Lingering keeps the user manager (and the daemon) alive without an open
-// session: headless boots, logged-out laptops. Returns "" or why not.
+// Lingering keeps the user manager alive without an open session (headless boots).
 func enableLinger() string {
 	code, out := runCommand("loginctl", []string{"enable-linger", os.Getenv("USER")}, "")
 	if code != 0 {
@@ -1000,8 +996,7 @@ func autostartOn() int {
 			"  run the daemon manually instead: gitwatchd start")
 		return 1
 	}
-	// Recorded before the outcome is known, so that a failure here is retried
-	// on a later daemon start instead of being forgotten.
+	// Recorded before attempting, so a failed enable is retried on a later start.
 	setLaunchAtLogin(true)
 	if msg := writeAutostartUnit(); msg != "" {
 		warn(msg)
@@ -1068,13 +1063,9 @@ func autostartStatus() int {
 	return 0
 }
 
-// First-run onboarding: the daemon matches autostart to the launch-at-login
-// setting on every start, so an installed gitwatchd ends up running at boot
-// without anyone asking for it.
+// First-run onboarding: an installed gitwatchd ends up running at boot without anyone asking.
 
-// `make install` and `make uninstall` know three destinations; a binary anywhere
-// else (a build directory, a checkout) is a development copy, which onboarding
-// leaves alone along with the record.
+// A binary outside the three install destinations is a development copy: onboarding leaves it alone.
 func isInstalledBinary(exe string) bool {
 	dir, err := filepath.EvalSymlinks(filepath.Dir(exe))
 	if err != nil {
@@ -1091,7 +1082,7 @@ func isInstalledBinary(exe string) bool {
 
 type autostartConditions struct {
 	installedBinary bool
-	recorded        bool // the user's wish has been recorded before
+	recorded        bool
 	wantsOn         bool
 	systemdPresent  bool
 	unitEnabled     bool
@@ -1106,8 +1097,6 @@ const (
 	autostartReportUnavailable
 )
 
-// What a daemon start should do about autostart. Kept apart from the doing, so
-// the whole table is testable on a host without systemd.
 func autostartActionFor(c autostartConditions) autostartAction {
 	if !c.installedBinary {
 		return autostartLeaveAlone
@@ -1130,9 +1119,7 @@ func autostartActionFor(c autostartConditions) autostartAction {
 	return autostartReinstate
 }
 
-// Install the unit and enable it for the next boot without starting it: the
-// caller is the running daemon, and `--now` would start a second copy that
-// dies on the single-instance lock. Returns "" on success, or why not.
+// No --now: the caller is the running daemon, and a second copy dies on the single-instance lock.
 func enableAutostartForNextBoot() string {
 	if msg := writeAutostartUnit(); msg != "" {
 		return msg
@@ -1144,10 +1131,8 @@ func enableAutostartForNextBoot() string {
 	return ""
 }
 
-// Make autostart match the recorded wish. The first start of an installed
-// gitwatchd turns it on: a daemon that doesn't come back after a reboot is not
-// doing the one job it has. Returns a line for the daemon log, or "" when
-// there was nothing to do.
+// First start of an installed gitwatchd turns autostart on: a daemon that does
+// not come back after a reboot is not doing its one job.
 func reconcileAutostart() string {
 	exe, err := os.Executable()
 	if err != nil {

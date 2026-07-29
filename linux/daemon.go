@@ -17,8 +17,7 @@ import (
 	"unsafe"
 )
 
-// Where the daemon keeps its runtime files. GITWATCHD_STATE_DIR overrides the
-// lot, which is how the tests get a daemon of their own.
+// GITWATCHD_STATE_DIR overrides, which is how tests get a daemon of their own.
 func stateDir() string {
 	if d := os.Getenv("GITWATCHD_STATE_DIR"); d != "" {
 		return d
@@ -51,21 +50,15 @@ type RepoStatus struct {
 	NextRetry   *int64 `json:"nextRetry,omitempty"`
 }
 
-// Everything gitwatchd persists: settings as top-level keys, and per-repo error
-// state under "repos", keyed by absolute path (a healthy repo has no entry).
-//
-// This shape is the cross-platform contract. macOS keeps the same values in a
-// SQLite key-value store today and moves onto this file later, so the setting
-// names and their "on"/"off" values are the ones in macos/Sources/StateDB.swift.
-// The file is written pretty-printed, in a stable key order, because it is meant
-// to be read and diffed by people.
+// Everything gitwatchd persists; a healthy repo has no entry under "repos".
+// The shape is the cross-platform contract (names match macos/Sources/StateDB.swift),
+// pretty-printed in stable key order because people read and diff it.
 type persistedState struct {
 	LaunchAtLogin string                `json:"launch-at-login,omitempty"` // "on", "off", absent: never asked
 	Repos         map[string]RepoStatus `json:"repos,omitempty"`
 }
 
-// Takes no lock: writes land by rename, so a reader always sees one whole
-// version of the file. Absent, empty or unreadable state reads as empty.
+// Lock-free: writes land by rename. Absent or unreadable state reads as empty.
 func readState() persistedState {
 	raw, err := os.ReadFile(statePath())
 	if err != nil {
@@ -78,15 +71,10 @@ func readState() persistedState {
 	return s
 }
 
-// Apply one read-modify-write to the state file under an exclusive lock. Two
-// processes write it (the daemon publishes repo state, the CLI records
-// settings), and a whole-file rewrite from a stale read would drop the other's
-// update.
-//
-// The lock is a file of its own, and never state.json: writes land by renaming
-// a temp file over state.json, so a lock taken on state.json itself would be
-// left holding an unlinked inode while the next writer locked the file that
-// replaced it, and both would proceed at once.
+// Daemon and CLI both rewrite the whole file; the flock stops one from writing
+// off a stale read. The lock is its own file, never state.json: renaming over a
+// locked file leaves the holder pinning an unlinked inode while the next writer
+// locks its replacement.
 func updateState(change func(*persistedState)) {
 	os.MkdirAll(stateDir(), 0o755)
 	lock, err := os.OpenFile(stateLockPath(), os.O_RDWR|os.O_CREATE, 0o644)
@@ -110,8 +98,6 @@ func writeState(s persistedState) {
 		return
 	}
 	raw = append(raw, '\n')
-	// Write beside the file and rename over it, so no reader ever sees a
-	// half-written state.
 	tmp := statePath() + ".tmp"
 	if os.WriteFile(tmp, raw, 0o644) == nil {
 		os.Rename(tmp, statePath())
@@ -126,7 +112,6 @@ func repoStatuses() map[string]RepoStatus {
 	return statuses
 }
 
-// Record one repo's error state, or clear it when status is nil.
 func setRepoStatus(repoPath string, status *RepoStatus) {
 	updateState(func(s *persistedState) {
 		if status == nil {
@@ -140,7 +125,6 @@ func setRepoStatus(repoPath string, status *RepoStatus) {
 	})
 }
 
-// Forget the repos that have left the config.
 func keepOnlyRepos(watched map[string]bool) {
 	updateState(func(s *persistedState) {
 		for path := range s.Repos {
@@ -151,8 +135,6 @@ func keepOnlyRepos(watched map[string]bool) {
 	})
 }
 
-// Whether the user wants the daemon started at login, and whether anyone has
-// said either way yet.
 func launchAtLogin() (on bool, recorded bool) {
 	value := readState().LaunchAtLogin
 	return value != "off", value != ""
@@ -166,8 +148,7 @@ func setLaunchAtLogin(on bool) {
 	updateState(func(s *persistedState) { s.LaunchAtLogin = value })
 }
 
-// The running daemon: one watcher per watchable repo in the config, kept in
-// step with the file as it is edited.
+// One watcher per watchable repo, kept in step with the config file as it is edited.
 type daemon struct {
 	watchers      map[string]*repoWatcher // by repo path
 	previousSpecs map[string]*RepoSpec    // the last config seen, paused entries included
@@ -219,9 +200,6 @@ func runDaemon() int {
 	return 0
 }
 
-// Bring the watchers in line with the config: stop the ones whose repo left,
-// was paused or had its flags edited, and start one for every watchable repo
-// that has none.
 func (d *daemon) reloadConfig() {
 	specs, errs := configLoad()
 	for _, e := range errs {
@@ -272,8 +250,7 @@ func (d *daemon) reloadConfig() {
 	d.previousSpecs = desired
 }
 
-// Watch the config file's directory and report every change to the file
-// itself (editors typically replace the file, so watching the path breaks).
+// Watch the directory, not the file: editors replace the file on save.
 func watchConfigFile(changed chan struct{}) {
 	fd, err := syscall.InotifyInit1(syscall.IN_CLOEXEC)
 	if err != nil {
@@ -291,9 +268,8 @@ func watchConfigFile(changed chan struct{}) {
 	})
 }
 
-// Read from an inotify fd until it closes, calling onEvent for every event.
-// Each event is a fixed-size header followed by Len bytes of NUL-padded name,
-// and the read buffer has to be big enough to hold a whole one.
+// Each event is a fixed header plus Len bytes of NUL-padded name; the buffer
+// must be big enough to hold a whole one.
 func readInotifyEvents(fd int, onEvent func(watchDescriptor int, mask uint32, name string)) {
 	buf := make([]byte, 64*1024)
 	for {
@@ -314,9 +290,7 @@ func readInotifyEvents(fd int, onEvent func(watchDescriptor int, mask uint32, na
 	}
 }
 
-// Ask the receiver to run once more. A wakeup already queued covers whatever
-// just happened (the receiver reads current state), so a full channel is a
-// success, not a reason to block.
+// A wakeup already queued covers this one: the receiver reads current state.
 func queueWakeup(ch chan struct{}) {
 	select {
 	case ch <- struct{}{}:
@@ -369,13 +343,10 @@ type repoError struct {
 	nextRetry   *time.Time // nil: no auto retry, waits for a change
 }
 
-// Recursive inotify watcher for one repo, with a debounce (gitwatch's -s) and
-// .git-churn filtering so our own commits don't retrigger the watcher. Also
-// honors gitwatch's -x exclude patterns.
-//
-// On top of the gitwatch cycle it keeps an additive reliability layer: per-repo
-// error state and automatic push retries with backoff. The layer never changes
-// what a commit cycle does; it only re-runs the push stage of one that failed.
+// Recursive inotify watcher for one repo: gitwatch's -s debounce and -x excludes,
+// plus .git-churn filtering so our own commits don't retrigger. Its reliability
+// layer (error state, push retries with backoff) never changes what a commit
+// cycle does; it only re-runs the push stage of one that failed.
 type repoWatcher struct {
 	spec *RepoSpec
 
@@ -391,8 +362,7 @@ type repoWatcher struct {
 	lastError    *repoError
 	watchFailure string // e.g. the inotify watch limit; surfaced, never fatal
 
-	// Called after every cycle with the repo path and its error state
-	// (nil while healthy); the daemon publishes it for `status`.
+	// Called after every cycle; nil while healthy. The daemon publishes it for `status`.
 	onStatus func(path string, status *RepoStatus)
 	logf     func(format string, args ...any)
 }
@@ -589,8 +559,6 @@ func (w *repoWatcher) report(outcome Outcome, retry *time.Timer) {
 	w.logOutcome(outcome)
 }
 
-// Hand this repo's error state (nil while healthy) to the state file, where
-// `gitwatchd status` reads it.
 func (w *repoWatcher) publishStatus() {
 	w.watchMu.Lock()
 	watchFailure := w.watchFailure

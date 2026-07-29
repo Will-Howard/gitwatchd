@@ -47,8 +47,7 @@ install: build
 	"$$DEST/gitwatchd" start
 	@echo "  Next:  gitwatchd .   to watch the current repo"
 
-# Everything below finds gitwatchd by absolute path: uninstalling has to work
-# from a shell whose PATH never had the binary on it.
+# Uninstall never trusts PATH: everything is found by absolute path.
 uninstall:
 	@for d in /usr/local/bin "$$HOME/.local/bin" "$$HOME/bin"; do \
 		[ -x "$$d/gitwatchd" ] && "$$d/gitwatchd" autostart off >/dev/null 2>&1 || true; \
