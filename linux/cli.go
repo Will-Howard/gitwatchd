@@ -37,13 +37,11 @@ COMMANDS
   rm <name|path>        stop watching a repo
   pause <name|path>     stop watching temporarily; the repo stays listed
   resume <name|path>    start watching again and commit what piled up
-  status                everything being watched, in the terminal
+  status                show everything being watched, along with any errors
   start, stop           start or stop the daemon
   autostart [on|off|status]
-                        run the daemon at boot (installs a systemd user service).
-                        On by default: the first run of the daemon
-                        turns it on. ` + "`gitwatchd autostart off`" + ` is the
-                        standing opt-out, and nothing turns it back on for you.
+                        launch the daemon at boot (on by default on install).
+                        This adds a systemd service.
   config [path|edit]    print the config file path, or open it in your
                         editor (the one ` + "`git commit`" + ` uses)
   help                  show this help
@@ -228,15 +226,15 @@ func cliAdd(args []string) int {
 	configAppend(strings.Join(quoted, " "))
 	ensureDaemonRunning()
 
-	pushNote := "local only"
+	pushNote := ""
 	if spec.Remote != "" {
 		branch := spec.Branch
 		if branch == "" {
 			branch = currentBranch(spec.WorkDir(), spec.GitDir)
 		}
-		pushNote = "→ " + spec.Remote + "/" + branch
+		pushNote = "→ " + spec.Remote + "/" + branch + ", "
 	}
-	fmt.Printf("✓ watching  %s  (%s)  %s, settle %ds\n", spec.Name(), spec.Path, pushNote, int(spec.Settle))
+	fmt.Printf("✓ watching  %s  (%s)  %sdebounce %ds\n", spec.Name(), spec.Path, pushNote, int(spec.Settle))
 	fmt.Println("  gitwatchd status   to see everything watched")
 	return 0
 }
@@ -382,10 +380,10 @@ func cliDoctor() int {
 		}
 		fmt.Printf("  SSH_AUTH_SOCK  present · %d %s in agent\n", n, keys)
 		if n == 0 {
-			fmt.Println("                 ⚠ no keys loaded: SSH pushes may fail. Add: ssh-add ~/.ssh/id_ed25519")
+			fmt.Println("                 ⚠ no keys loaded: SSH pushes may fail. Add one with: ssh-add")
 		}
 	} else {
-		fmt.Println("  SSH_AUTH_SOCK  (unset) ⚠ SSH pushes will fail from the daemon unless keys are unencrypted")
+		fmt.Println("  SSH_AUTH_SOCK  (unset) ⚠ SSH pushes will fail from the daemon")
 	}
 	return 0
 }
@@ -461,7 +459,7 @@ func cliStart() int {
 		if daemonServiceInstalled() && systemctlPresent() {
 			logs = "journalctl --user -u gitwatchd"
 		}
-		warn("daemon did not come up; check " + logs)
+		warn("daemon did not start; check " + logs)
 		return 1
 	}
 	fmt.Println("✓ daemon started")
@@ -1078,7 +1076,7 @@ func autostartOn() int {
 		fmt.Println("  without lingering the daemon stops when you log out")
 		return 0
 	}
-	fmt.Println("✓ autostart: on (systemd user service enabled, survives logout and reboot)")
+	fmt.Println("✓ autostart: on (systemd user service enabled)")
 	return 0
 }
 
