@@ -108,14 +108,20 @@ enum RepoSpecParser {
         }
 
         guard let target else { return (nil, "no target path given", args) }
-        spec.path = (target.token as NSString).expandingTildeInPath
-        if !(spec.path as NSString).isAbsolutePath {
-            spec.path = (directory as NSString).appendingPathComponent(spec.path)
-        }
-        spec.path = (spec.path as NSString).standardizingPath
+        spec.path = resolve(target.token, invokedFrom: directory)
         var resolved = args
         resolved[target.index] = spec.path
         return (spec, nil, resolved)
+    }
+
+    /// The absolute path a target token names, with a relative one taken from
+    /// `directory`: the shell's working directory, never the daemon's.
+    static func resolve(_ target: String, invokedFrom directory: String) -> String {
+        var path = (target as NSString).expandingTildeInPath
+        if !(path as NSString).isAbsolutePath {
+            path = (directory as NSString).appendingPathComponent(path)
+        }
+        return (path as NSString).standardizingPath
     }
 
     /// The -d value goes to date(1) verbatim, as upstream: formats need a
