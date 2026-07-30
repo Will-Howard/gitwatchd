@@ -67,6 +67,22 @@ func TestDaemonEndToEnd(t *testing.T) {
 	home := t.TempDir()
 	env := isolatedEnv(home)
 	t.Cleanup(func() { killDaemonIfRunning(home) })
+	// Runs before the kill above (LIFO), so a wedged daemon is still alive to inspect.
+	t.Cleanup(func() {
+		if !t.Failed() {
+			return
+		}
+		t.Logf("daemon log:\n%s", daemonLogIn(home))
+		_, ps := runCommand("ps", []string{"-ef"}, "")
+		var related []string
+		for _, l := range strings.Split(ps, "\n") {
+			if strings.Contains(l, "systemctl") || strings.Contains(l, "loginctl") ||
+				strings.Contains(l, "gitwatchd") {
+				related = append(related, l)
+			}
+		}
+		t.Logf("related processes:\n%s", strings.Join(related, "\n"))
+	})
 
 	repo := newTestRepo(t)
 	if code, out := runCLI(env, "add", "-s", "0", repo.path); code != 0 {
