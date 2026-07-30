@@ -51,8 +51,8 @@ enum CLI {
         Config.append(line)
         ensureDaemonRunning()
 
-        let pushNote = spec.remote.map { "→ \($0)/\(spec.branch ?? Git.currentBranch(spec.workDir))" } ?? "local only"
-        print("✓ watching  \(spec.name)  (\(spec.path))  \(pushNote), settle \(Int(spec.settle))s")
+        let pushNote = spec.remote.map { "→ \($0)/\(spec.branch ?? Git.currentBranch(spec.workDir)), " } ?? ""
+        print("✓ watching  \(spec.name)  (\(spec.path))  \(pushNote)debounce \(Int(spec.settle))s")
         print("  gitwatchd status   to see everything watched")
         return 0
     }
@@ -138,7 +138,7 @@ enum CLI {
             let keys = runProcess("/usr/bin/ssh-add", ["-l"], env: env)
             let n = keys.code == 0 ? keys.out.split(separator: "\n").count : 0
             print("  SSH_AUTH_SOCK  present · \(n) key\(n == 1 ? "" : "s") in agent")
-            if n == 0 { print("                 ⚠ no keys loaded: SSH pushes may fail. Add: ssh-add --apple-use-keychain ~/.ssh/id_ed25519") }
+            if n == 0 { print("                 ⚠ no keys loaded: SSH pushes may fail. Add one with: ssh-add") }
         } else {
             print("  SSH_AUTH_SOCK  (unset) ⚠ SSH pushes will fail from the daemon")
         }
@@ -285,7 +285,7 @@ enum CLI {
           rm <name|path>        stop watching a repo
           pause <name|path>     stop watching temporarily; the repo stays listed
           resume <name|path>    start watching again and commit what piled up
-          status                everything the menu shows, in the terminal
+          status                show everything being watched, along with any errors
           start, stop           start or stop the menu-bar daemon
           autostart [on|off|status]
                                 launch the daemon at login (on by default on install)
