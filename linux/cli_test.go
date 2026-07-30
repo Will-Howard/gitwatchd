@@ -123,6 +123,45 @@ func TestRmMatchesByFullPath(t *testing.T) {
 	}
 }
 
+func TestRmMatchesTheRepoItRunsIn(t *testing.T) {
+	withTemporaryConfig(t)
+	repo := newTestRepo(t)
+	cliRun([]string{repo.path})
+	t.Chdir(repo.path)
+	if cliRun([]string{"rm", "."}) != 0 {
+		t.Error("rm . failed")
+	}
+	if len(configSpecs()) != 0 {
+		t.Error("the entry should be gone")
+	}
+}
+
+func TestRmMatchesARelativePath(t *testing.T) {
+	withTemporaryConfig(t)
+	repo := newTestRepo(t)
+	cliRun([]string{repo.path})
+	t.Chdir(filepath.Dir(repo.path))
+	if cliRun([]string{"rm", "./" + repo.spec().Name()}) != 0 {
+		t.Error("rm by relative path failed")
+	}
+	if len(configSpecs()) != 0 {
+		t.Error("the entry should be gone")
+	}
+}
+
+func TestRmMatchesByNameFromAnUnrelatedDirectory(t *testing.T) {
+	withTemporaryConfig(t)
+	repo := newTestRepo(t)
+	cliRun([]string{repo.path})
+	t.Chdir(t.TempDir())
+	if cliRun([]string{"rm", repo.spec().Name()}) != 0 {
+		t.Error("rm by name failed")
+	}
+	if len(configSpecs()) != 0 {
+		t.Error("the entry should be gone")
+	}
+}
+
 func TestRmUnknownFailsAndLeavesConfigAlone(t *testing.T) {
 	withTemporaryConfig(t)
 	repo := newTestRepo(t)
@@ -168,6 +207,25 @@ func TestPauseByFullPath(t *testing.T) {
 	}
 	if !configSpecs()[0].Paused {
 		t.Error("spec should be paused")
+	}
+}
+
+func TestPauseAndResumeTakeARelativeTarget(t *testing.T) {
+	withTemporaryConfig(t)
+	repo := newTestRepo(t)
+	cliRun([]string{repo.path})
+	t.Chdir(repo.path)
+	if cliRun([]string{"pause", "."}) != 0 {
+		t.Fatal("pause . failed")
+	}
+	if !configSpecs()[0].Paused {
+		t.Error("spec should be paused")
+	}
+	if cliRun([]string{"resume", "."}) != 0 {
+		t.Fatal("resume . failed")
+	}
+	if configSpecs()[0].Paused {
+		t.Error("spec should be resumed")
 	}
 }
 

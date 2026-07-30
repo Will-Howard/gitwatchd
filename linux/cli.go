@@ -646,7 +646,7 @@ func configAppend(line string) {
 }
 
 func configMatches(spec *RepoSpec, nameOrPath string) bool {
-	return spec.Path == expandTilde(nameOrPath) || spec.Name() == nameOrPath || spec.Path == nameOrPath
+	return spec.Name() == nameOrPath || spec.Path == nameOrPath || spec.Path == normalizePath(nameOrPath)
 }
 
 func configRemove(nameOrPath string) int {
@@ -673,10 +673,9 @@ func configRemove(nameOrPath string) int {
 	return removed
 }
 
-// Flip the --paused token on config lines matching `nameOrPath` (by full
-// path or repo name, like remove). Pause lives in the config, not daemon
-// state, so it survives daemon and machine restarts. Returns the number
-// of lines changed.
+// Flip the --paused token on config lines matching `nameOrPath` (as remove
+// matches). Pause lives in the config, not daemon state, so it survives
+// daemon and machine restarts. Returns the number of lines changed.
 func configSetPaused(nameOrPath string, paused bool) int {
 	raw, err := os.ReadFile(configPath())
 	if err != nil {
