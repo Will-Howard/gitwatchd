@@ -15,7 +15,7 @@ import (
 
 // Keep in step with the macOS CLI (macos/Sources/CLI.swift) and Info.plist:
 // the two implementations ship as one product and report one version.
-const version = "0.2.0"
+const version = "0.2.1"
 
 const usageText = `gitwatchd - daemon that watches git repos and auto-commits changes
 
