@@ -8,3 +8,6 @@ NOTES.md
 
 # Code-signing material (private key + CSR); never part of this repo
 signing/
+
+# Go binary built in-place by `go build .` in linux/ (make builds into build/)
+/linux/gitwatchd

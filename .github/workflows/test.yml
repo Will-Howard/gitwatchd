@@ -6,11 +6,22 @@ on:
   pull_request:
 
 jobs:
-  test:
+  mac:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v5
       - name: Build app
-        run: make
+        run: make -C macos
       - name: Run tests
-        run: make test
+        run: make -C macos test
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: linux/go.mod
+      - name: Build
+        run: make -C linux
+      - name: Run tests
+        run: make -C linux test
