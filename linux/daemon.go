@@ -171,9 +171,6 @@ func runDaemon() int {
 		},
 	}
 	d.logf("gitwatchd %s: watching config %s", version, configPath())
-	if msg := reconcileAutostart(); msg != "" {
-		d.logf("%s", msg)
-	}
 	d.reloadConfig()
 
 	configChanged := make(chan struct{}, 1)
@@ -189,6 +186,13 @@ func runDaemon() int {
 			d.reloadConfig()
 		}
 	}()
+
+	// Last: reconcile talks to systemd, which can be slow, and repo or config
+	// changes made while nothing watches would be missed for good (there is
+	// no catch-up commit on start).
+	if msg := reconcileAutostart(); msg != "" {
+		d.logf("%s", msg)
+	}
 
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
