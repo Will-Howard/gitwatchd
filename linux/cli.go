@@ -37,13 +37,11 @@ COMMANDS
   rm <name|path>        stop watching a repo
   pause <name|path>     stop watching temporarily; the repo stays listed
   resume <name|path>    start watching again and commit what piled up
-  status                everything being watched, in the terminal
+  status                show everything being watched, along with any errors
   start, stop           start or stop the daemon
   autostart [on|off|status]
-                        run the daemon at boot (installs a systemd user unit).
-                        On by default: the first run of an installed gitwatchd
-                        turns it on. ` + "`gitwatchd autostart off`" + ` is the
-                        standing opt-out, and nothing turns it back on for you.
+                        launch the daemon at boot (on by default on install).
+                        This adds a systemd service.
   config [path|edit]    print the config file path, or open it in your
                         editor (the one ` + "`git commit`" + ` uses)
   help                  show this help
@@ -228,15 +226,15 @@ func cliAdd(args []string) int {
 	configAppend(strings.Join(quoted, " "))
 	ensureDaemonRunning()
 
-	pushNote := "local only"
+	pushNote := ""
 	if spec.Remote != "" {
 		branch := spec.Branch
 		if branch == "" {
 			branch = currentBranch(spec.WorkDir(), spec.GitDir)
 		}
-		pushNote = "→ " + spec.Remote + "/" + branch
+		pushNote = "→ " + spec.Remote + "/" + branch + ", "
 	}
-	fmt.Printf("✓ watching  %s  (%s)  %s, settle %ds\n", spec.Name(), spec.Path, pushNote, int(spec.Settle))
+	fmt.Printf("✓ watching  %s  (%s)  %sdebounce %ds\n", spec.Name(), spec.Path, pushNote, int(spec.Settle))
 	fmt.Println("  gitwatchd status   to see everything watched")
 	return 0
 }
@@ -382,10 +380,10 @@ func cliDoctor() int {
 		}
 		fmt.Printf("  SSH_AUTH_SOCK  present · %d %s in agent\n", n, keys)
 		if n == 0 {
-			fmt.Println("                 ⚠ no keys loaded: SSH pushes may fail. Add: ssh-add ~/.ssh/id_ed25519")
+			fmt.Println("                 ⚠ no keys loaded: SSH pushes may fail. Add one with: ssh-add")
 		}
 	} else {
-		fmt.Println("  SSH_AUTH_SOCK  (unset) ⚠ SSH pushes will fail from the daemon unless keys are unencrypted")
+		fmt.Println("  SSH_AUTH_SOCK  (unset) ⚠ SSH pushes will fail from the daemon")
 	}
 	return 0
 }
@@ -444,7 +442,7 @@ func cliStart() int {
 		fmt.Println("daemon already running")
 		return 0
 	}
-	if unitInstalled() && systemctlPresent() {
+	if daemonServiceInstalled() && systemctlPresent() {
 		if code, out := systemctlUser("start", "gitwatchd"); code != 0 {
 			warn("systemctl --user start gitwatchd failed: " + out)
 			return 1
@@ -458,10 +456,10 @@ func cliStart() int {
 	}
 	if !isDaemonRunning() {
 		logs := logfilePath()
-		if unitInstalled() && systemctlPresent() {
+		if daemonServiceInstalled() && systemctlPresent() {
 			logs = "journalctl --user -u gitwatchd"
 		}
-		warn("daemon did not come up; check " + logs)
+		warn("daemon did not start; check " + logs)
 		return 1
 	}
 	fmt.Println("✓ daemon started")
@@ -473,7 +471,7 @@ func cliStop() int {
 		fmt.Println("daemon not running")
 		return 0
 	}
-	if unitInstalled() && systemctlPresent() && unitActive() {
+	if daemonServiceInstalled() && systemctlPresent() && daemonServiceActive() {
 		systemctlUser("stop", "gitwatchd")
 	} else if pid := daemonPid(); pid > 0 {
 		syscall.Kill(pid, syscall.SIGTERM)
@@ -541,7 +539,7 @@ func ensureDaemonRunning() {
 	if os.Getenv("GITWATCHD_NO_SPAWN") != "" || isDaemonRunning() {
 		return
 	}
-	if unitInstalled() && systemctlPresent() {
+	if daemonServiceInstalled() && systemctlPresent() {
 		systemctlUser("start", "gitwatchd")
 		return
 	}
@@ -953,12 +951,12 @@ func retryLine(lastTried time.Time, nextRetry *time.Time, now time.Time) string 
 	return tried + " · retrying in " + span(dt)
 }
 
-// Autostart = a systemd user unit, the standard way for a per-user daemon to
+// Autostart = a systemd user service, the standard way for a per-user daemon to
 // survive reboots and headless boots (with lingering). If systemd is absent,
 // report this and do nothing (the user should e.g. add `gitwatchd start` to
 // a startup script in this case).
 
-func unitPath() string {
+func daemonServicePath() string {
 	return filepath.Join(homeDir(), ".config", "systemd", "user", "gitwatchd.service")
 }
 
@@ -967,8 +965,8 @@ func systemctlPresent() bool {
 	return err == nil
 }
 
-func unitInstalled() bool {
-	_, err := os.Stat(unitPath())
+func daemonServiceInstalled() bool {
+	_, err := os.Stat(daemonServicePath())
 	return err == nil
 }
 
@@ -976,27 +974,48 @@ func systemctlUser(args ...string) (int, string) {
 	return runCommand("systemctl", append([]string{"--user"}, args...), "")
 }
 
-func unitActive() bool {
+func daemonServiceActive() bool {
 	_, out := systemctlUser("is-active", "gitwatchd")
 	return out == "active"
 }
 
-func unitEnabled() bool {
-	if !unitInstalled() {
+func daemonServiceEnabled() bool {
+	if !daemonServiceInstalled() {
 		return false
 	}
 	_, out := systemctlUser("is-enabled", "gitwatchd")
 	return out == "enabled"
 }
 
+// The service file hardcodes the path of the binary to start at boot; if that
+// is not the binary running now (a deleted build, an old install dir),
+// reconcile rewrites it. Compare against exactly what writeDaemonService writes.
+func daemonServicePointsAtThisBinary() bool {
+	raw, err := os.ReadFile(daemonServicePath())
+	if err != nil {
+		return false
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return true // cannot tell, so do not churn the service file
+	}
+	exe, _ = filepath.EvalSymlinks(exe)
+	for _, line := range strings.Split(string(raw), "\n") {
+		if target, ok := strings.CutPrefix(line, "ExecStart="); ok {
+			return target == exe+" daemon"
+		}
+	}
+	return false
+}
+
 // Returns "" on success, or why not.
-func writeAutostartUnit() string {
+func writeDaemonService() string {
 	exe, err := os.Executable()
 	if err != nil {
 		return "cannot resolve the gitwatchd binary path: " + err.Error()
 	}
 	exe, _ = filepath.EvalSymlinks(exe)
-	unit := fmt.Sprintf(`[Unit]
+	service := fmt.Sprintf(`[Unit]
 Description=gitwatchd: watch git repos and auto-commit changes
 
 [Service]
@@ -1007,11 +1026,11 @@ RestartSec=5
 [Install]
 WantedBy=default.target
 `, exe)
-	if err := os.MkdirAll(filepath.Dir(unitPath()), 0o755); err != nil {
-		return "cannot create " + filepath.Dir(unitPath()) + ": " + err.Error()
+	if err := os.MkdirAll(filepath.Dir(daemonServicePath()), 0o755); err != nil {
+		return "cannot create " + filepath.Dir(daemonServicePath()) + ": " + err.Error()
 	}
-	if err := os.WriteFile(unitPath(), []byte(unit), 0o644); err != nil {
-		return "cannot write " + unitPath() + ": " + err.Error()
+	if err := os.WriteFile(daemonServicePath(), []byte(service), 0o644); err != nil {
+		return "cannot write " + daemonServicePath() + ": " + err.Error()
 	}
 	systemctlUser("daemon-reload")
 	return ""
@@ -1034,13 +1053,13 @@ func autostartOn() int {
 	}
 	// Recorded before attempting, so a failed enable is retried on a later start.
 	setLaunchAtLogin(true)
-	if msg := writeAutostartUnit(); msg != "" {
+	if msg := writeDaemonService(); msg != "" {
 		warn(msg)
 		return 1
 	}
 	// A directly spawned daemon holds the single-instance lock and would
-	// make the unit fail; hand it over to systemd.
-	if isDaemonRunning() && !unitActive() {
+	// make the service fail; hand it over to systemd.
+	if isDaemonRunning() && !daemonServiceActive() {
 		if pid := daemonPid(); pid > 0 {
 			syscall.Kill(pid, syscall.SIGTERM)
 			waitForDaemonExit(5 * time.Second)
@@ -1051,12 +1070,12 @@ func autostartOn() int {
 		return 1
 	}
 	if note := enableLinger(); note != "" {
-		fmt.Println("✓ autostart: on (systemd user unit enabled)")
+		fmt.Println("✓ autostart: on (systemd user service enabled)")
 		fmt.Println("  note: loginctl enable-linger failed (" + note + ")")
 		fmt.Println("  without lingering the daemon stops when you log out")
 		return 0
 	}
-	fmt.Println("✓ autostart: on (systemd user unit enabled, survives logout and reboot)")
+	fmt.Println("✓ autostart: on (systemd user service enabled)")
 	return 0
 }
 
@@ -1066,12 +1085,12 @@ func autostartOff() int {
 		warn("systemd not found: nothing to turn off (autostart was never installed)")
 		return 1
 	}
-	if !unitInstalled() {
+	if !daemonServiceInstalled() {
 		fmt.Println("autostart: already off")
 		return 0
 	}
 	systemctlUser("disable", "--now", "gitwatchd")
-	os.Remove(unitPath())
+	os.Remove(daemonServicePath())
 	systemctlUser("daemon-reload")
 	fmt.Println("✓ autostart: off")
 	return 0
@@ -1082,7 +1101,7 @@ func autostartStatus() int {
 		fmt.Println("autostart: unavailable (systemd not found); run the daemon with: gitwatchd start")
 		return 0
 	}
-	if !unitInstalled() {
+	if !daemonServiceInstalled() {
 		fmt.Println("autostart: off")
 		return 0
 	}
@@ -1091,7 +1110,7 @@ func autostartStatus() int {
 	if enabled != "enabled" {
 		state = "installed but " + enabled
 	}
-	if unitActive() {
+	if daemonServiceActive() {
 		fmt.Printf("autostart: %s (daemon running)\n", state)
 	} else {
 		fmt.Printf("autostart: %s (daemon not running)\n", state)
@@ -1099,29 +1118,12 @@ func autostartStatus() int {
 	return 0
 }
 
-// First-run onboarding: an installed gitwatchd ends up running at boot without anyone asking.
-
-// A binary outside the three install destinations is a development copy: onboarding leaves it alone.
-func isInstalledBinary(exe string) bool {
-	dir, err := filepath.EvalSymlinks(filepath.Dir(exe))
-	if err != nil {
-		return false
-	}
-	for _, root := range []string{"/usr/local/bin",
-		filepath.Join(homeDir(), ".local", "bin"), filepath.Join(homeDir(), "bin")} {
-		if resolved, err := filepath.EvalSymlinks(root); err == nil && resolved == dir {
-			return true
-		}
-	}
-	return false
-}
-
 type autostartConditions struct {
-	installedBinary bool
-	recorded        bool
-	wantsOn         bool
-	systemdPresent  bool
-	unitEnabled     bool
+	recorded             bool
+	wantsOn              bool
+	systemdPresent       bool
+	daemonServiceEnabled bool
+	serviceStale         bool // enabled, but pointing at a binary that is not the one running
 }
 
 type autostartAction int
@@ -1134,9 +1136,6 @@ const (
 )
 
 func autostartActionFor(c autostartConditions) autostartAction {
-	if !c.installedBinary {
-		return autostartLeaveAlone
-	}
 	if c.recorded && !c.wantsOn {
 		return autostartLeaveAlone // `autostart off` is never overridden
 	}
@@ -1149,7 +1148,7 @@ func autostartActionFor(c autostartConditions) autostartAction {
 	if !c.recorded {
 		return autostartEnableFirstRun
 	}
-	if c.unitEnabled {
+	if c.daemonServiceEnabled && !c.serviceStale {
 		return autostartLeaveAlone
 	}
 	return autostartReinstate
@@ -1157,7 +1156,7 @@ func autostartActionFor(c autostartConditions) autostartAction {
 
 // No --now: the caller is the running daemon, and a second copy dies on the single-instance lock.
 func enableAutostartForNextBoot() string {
-	if msg := writeAutostartUnit(); msg != "" {
+	if msg := writeDaemonService(); msg != "" {
 		return msg
 	}
 	if code, out := systemctlUser("enable", "gitwatchd"); code != 0 {
@@ -1167,22 +1166,21 @@ func enableAutostartForNextBoot() string {
 	return ""
 }
 
-// First start of an installed gitwatchd turns autostart on: a daemon that does
-// not come back after a reboot is not doing its one job.
+// The first daemon start turns autostart on: a daemon that does not come back
+// after a reboot is not doing its one job. Only the lock holder gets here, so
+// the service always follows whichever binary actually has the daemon role.
 func reconcileAutostart() string {
-	exe, err := os.Executable()
-	if err != nil {
-		return ""
-	}
 	wantsOn, recorded := launchAtLogin()
 	conditions := autostartConditions{
-		installedBinary: isInstalledBinary(exe),
-		recorded:        recorded,
-		wantsOn:         wantsOn,
-		systemdPresent:  systemctlPresent(),
+		recorded:       recorded,
+		wantsOn:        wantsOn,
+		systemdPresent: systemctlPresent(),
 	}
 	if conditions.systemdPresent {
-		conditions.unitEnabled = unitEnabled()
+		conditions.daemonServiceEnabled = daemonServiceEnabled()
+		if conditions.daemonServiceEnabled {
+			conditions.serviceStale = !daemonServicePointsAtThisBinary()
+		}
 	}
 	action := autostartActionFor(conditions)
 	if action == autostartLeaveAlone {
@@ -1197,8 +1195,8 @@ func reconcileAutostart() string {
 		return "autostart could not be enabled: " + msg
 	}
 	if action == autostartEnableFirstRun {
-		return "autostart: on (systemd user unit enabled on first run; " +
+		return "autostart: on (systemd user service enabled on first run; " +
 			"turn it off with `gitwatchd autostart off`)"
 	}
-	return "autostart: the systemd user unit had gone missing, re-enabled it"
+	return "autostart: the systemd user service was missing or stale; re-enabled it"
 }

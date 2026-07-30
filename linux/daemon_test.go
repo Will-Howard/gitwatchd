@@ -67,6 +67,22 @@ func TestDaemonEndToEnd(t *testing.T) {
 	home := t.TempDir()
 	env := isolatedEnv(home)
 	t.Cleanup(func() { killDaemonIfRunning(home) })
+	// Runs before the kill above (LIFO), so a wedged daemon is still alive to inspect.
+	t.Cleanup(func() {
+		if !t.Failed() {
+			return
+		}
+		t.Logf("daemon log:\n%s", daemonLogIn(home))
+		_, ps := runCommand("ps", []string{"-ef"}, "")
+		var related []string
+		for _, l := range strings.Split(ps, "\n") {
+			if strings.Contains(l, "systemctl") || strings.Contains(l, "loginctl") ||
+				strings.Contains(l, "gitwatchd") {
+				related = append(related, l)
+			}
+		}
+		t.Logf("related processes:\n%s", strings.Join(related, "\n"))
+	})
 
 	repo := newTestRepo(t)
 	if code, out := runCLI(env, "add", "-s", "0", repo.path); code != 0 {
@@ -246,7 +262,7 @@ func TestAutostartDegradesClearlyWithoutSystemd(t *testing.T) {
 		t.Errorf("the message must explain and point to `gitwatchd start`:\n%s", out)
 	}
 	if _, err := os.Stat(filepath.Join(home, ".config", "systemd")); err == nil {
-		t.Error("no unit may be written when systemd is absent")
+		t.Error("no service file may be written when systemd is absent")
 	}
 	if entries, _ := os.ReadDir(home); len(entries) > 2 { // bin/ and nothing else unexpected
 		names := []string{}
@@ -257,7 +273,7 @@ func TestAutostartDegradesClearlyWithoutSystemd(t *testing.T) {
 	}
 }
 
-func TestDaemonFromABuildDirectoryLeavesAutostartAlone(t *testing.T) {
+func TestFirstDaemonRunOnboardsAutostart(t *testing.T) {
 	if testBinary == "" {
 		t.Fatal("test binary did not build")
 	}
@@ -272,45 +288,6 @@ func TestDaemonFromABuildDirectoryLeavesAutostartAlone(t *testing.T) {
 	if code, out := runCLI(env, "start"); code != 0 {
 		t.Fatalf("start: code=%d out=%s", code, out)
 	}
-	// Reconcile runs before the first repo is watched, so this log line means it is done.
-	waitFor(t, 15*time.Second, "the daemon to watch the repo", func() bool {
-		return strings.Contains(daemonLogIn(home), "watching "+filepath.Base(repo.path)+" (")
-	})
-	if strings.Contains(stateFileIn(home), "launch-at-login") {
-		t.Error("a development copy must record no wish")
-	}
-	if _, err := os.Stat(filepath.Join(home, ".config")); err == nil {
-		t.Error("a development copy must write no unit")
-	}
-	if code, out := runCLI(env, "stop"); code != 0 {
-		t.Fatalf("stop: code=%d out=%s", code, out)
-	}
-}
-
-func TestFirstInstalledDaemonRunOnboardsAutostart(t *testing.T) {
-	if testBinary == "" {
-		t.Fatal("test binary did not build")
-	}
-	home := t.TempDir()
-	env := envWithoutSystemctl(home)
-	t.Cleanup(func() { killDaemonIfRunning(home) })
-	installed := filepath.Join(home, ".local", "bin", "gitwatchd")
-	os.MkdirAll(filepath.Dir(installed), 0o755)
-	binary, err := os.ReadFile(testBinary)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(installed, binary, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	repo := newTestRepo(t)
-	if code, out := runBinary(installed, env, "add", "-s", "0", repo.path); code != 0 {
-		t.Fatalf("add failed: %s", out)
-	}
-	if code, out := runBinary(installed, env, "start"); code != 0 {
-		t.Fatalf("start: code=%d out=%s", code, out)
-	}
 	waitFor(t, 15*time.Second, "the recorded autostart wish", func() bool {
 		return strings.Contains(stateFileIn(home), `"launch-at-login": "on"`)
 	})
@@ -319,14 +296,14 @@ func TestFirstInstalledDaemonRunOnboardsAutostart(t *testing.T) {
 		t.Errorf("the log must explain and point at `gitwatchd start`:\n%s", log)
 	}
 	if _, err := os.Stat(filepath.Join(home, ".config", "systemd")); err == nil {
-		t.Error("no unit may be written when systemd is absent")
+		t.Error("no service file may be written when systemd is absent")
 	}
 
 	// The wish is on record now, so a second start has nothing to say.
-	if code, out := runBinary(installed, env, "stop"); code != 0 {
+	if code, out := runCLI(env, "stop"); code != 0 {
 		t.Fatalf("stop: code=%d out=%s", code, out)
 	}
-	if code, out := runBinary(installed, env, "start"); code != 0 {
+	if code, out := runCLI(env, "start"); code != 0 {
 		t.Fatalf("second start: code=%d out=%s", code, out)
 	}
 	watched := "watching " + filepath.Base(repo.path) + " ("
@@ -336,7 +313,7 @@ func TestFirstInstalledDaemonRunOnboardsAutostart(t *testing.T) {
 	if n := strings.Count(daemonLogIn(home), "systemd not found"); n != 1 {
 		t.Errorf("autostart said it %d times; once is the whole point:\n%s", n, daemonLogIn(home))
 	}
-	if code, out := runBinary(installed, env, "stop"); code != 0 {
+	if code, out := runCLI(env, "stop"); code != 0 {
 		t.Fatalf("second stop: code=%d out=%s", code, out)
 	}
 }
